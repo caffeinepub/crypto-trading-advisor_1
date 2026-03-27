@@ -16,7 +16,12 @@ import { MarketView } from "./components/MarketView";
 import { PortfolioView } from "./components/PortfolioView";
 import { RightPanel } from "./components/RightPanel";
 import { SignalsView } from "./components/SignalsView";
-import { type CoinData, fluctuateCoins, initCoins } from "./data/coins";
+import {
+  type CoinData,
+  type MASignal,
+  type SignalType,
+  initCoins,
+} from "./data/coins";
 import {
   useAddToWatchlist,
   useRemoveFromWatchlist,
@@ -25,29 +30,77 @@ import {
 
 type TabName = "Dashboard" | "Market" | "Signals" | "Portfolio";
 
-// CoinGecko ID mapping
-const SYMBOL_TO_GECKO: Record<string, string> = {
-  BTC: "bitcoin",
-  ETH: "ethereum",
-  ICP: "internet-computer",
-  XRP: "ripple",
-  BNB: "binancecoin",
-  SOL: "solana",
-  ADA: "cardano",
-  DOT: "polkadot",
-  AVAX: "avalanche-2",
-  MATIC: "matic-network",
-  LINK: "chainlink",
-  UNI: "uniswap",
-  AAVE: "aave",
-  FET: "fetch-ai",
-  XDC: "xdcnetwork",
-  VET: "vechain",
-  XLM: "stellar",
-  KSM: "kusama",
-  SAND: "the-sandbox",
-  ILV: "illuvium",
-};
+function marketItemToCoin(item: any): CoinData {
+  const price = item.current_price ?? 0;
+  const change = item.price_change_percentage_24h ?? 0;
+  const seed = (item.symbol as string)
+    .split("")
+    .reduce((a: number, c: string) => a + c.charCodeAt(0), 0);
+  const rsi = 30 + (seed % 50);
+  const momentum = (seed % 100) - 50;
+  const signalIdx = seed % 5;
+  const signals: SignalType[] = [
+    "Strong Buy",
+    "Buy",
+    "Hold",
+    "Sell",
+    "Strong Sell",
+  ];
+  const signal = signals[signalIdx];
+  const strength = 40 + (seed % 50);
+  const maSignals: MASignal[] = ["buy", "neutral", "sell"];
+  const maSignal = maSignals[seed % 3];
+
+  const history: number[] = [];
+  let p = price * 0.95;
+  for (let i = 0; i < 20; i++) {
+    p = p * (1 + (((seed * (i + 1)) % 10) - 5) * 0.003);
+    history.push(Math.max(p, price * 0.001));
+  }
+  history[history.length - 1] = price;
+
+  const colors = [
+    "#F7931A",
+    "#627EEA",
+    "#3B00B9",
+    "#00AAE4",
+    "#F0B90B",
+    "#9945FF",
+    "#0033AD",
+    "#E84142",
+    "#8247E5",
+    "#2A5ADA",
+    "#FF007A",
+    "#B6509E",
+    "#1A1F6C",
+    "#2F8AF5",
+    "#15BDFF",
+    "#7D00FF",
+    "#E6007A",
+    "#04ADEF",
+    "#1E90FF",
+    "#22C55E",
+  ];
+  const iconColor = colors[seed % colors.length];
+
+  return {
+    symbol: (item.symbol as string).toUpperCase(),
+    name: item.name,
+    currentPrice: price,
+    priceChange24h: change,
+    rsi,
+    maSignal,
+    momentum,
+    signal,
+    signalStrength: strength,
+    reasoning: `${item.name} market data. RSI at ${rsi}. Simulated signal for educational purposes.`,
+    entryStrategy: "This is simulated data. Not financial advice.",
+    exitStrategy: "This is simulated data. Not financial advice.",
+    miniPriceHistory: history,
+    volume24h: item.total_volume ?? 0,
+    iconColor,
+  };
+}
 
 export default function App() {
   const [coins, setCoins] = useState<CoinData[]>(() => initCoins());
@@ -61,52 +114,29 @@ export default function App() {
   const addToWatchlist = useAddToWatchlist();
   const removeFromWatchlist = useRemoveFromWatchlist();
 
-  // Fetch live prices from CoinGecko on mount
+  // Fetch top 300 coins from CoinGecko on mount
   useEffect(() => {
-    const geckoIds = Object.values(SYMBOL_TO_GECKO).join(",");
-    fetch(
-      `https://api.coingecko.com/api/v3/simple/price?ids=${geckoIds}&vs_currencies=usd&include_24hr_change=true`,
-    )
-      .then((r) => r.json())
-      .then((data) => {
-        const geckoToSymbol: Record<string, string> = {};
-        for (const [sym, id] of Object.entries(SYMBOL_TO_GECKO)) {
-          geckoToSymbol[id] = sym;
+    Promise.all([
+      fetch(
+        "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=150&page=1&sparkline=false&price_change_percentage=24h",
+      ).then((r) => r.json()),
+      fetch(
+        "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=150&page=2&sparkline=false&price_change_percentage=24h",
+      ).then((r) => r.json()),
+    ])
+      .then(([page1, page2]) => {
+        const all = [
+          ...(Array.isArray(page1) ? page1 : []),
+          ...(Array.isArray(page2) ? page2 : []),
+        ];
+        if (all.length > 0) {
+          const newCoins = all.map(marketItemToCoin);
+          setCoins(newCoins);
+          setSelectedCoin(newCoins[0]);
         }
-        setCoins((prev) =>
-          prev.map((coin) => {
-            const geckoId = SYMBOL_TO_GECKO[coin.symbol];
-            const info = geckoId ? data[geckoId] : null;
-            if (!info) return coin;
-            const newPrice =
-              typeof info.usd === "number" && Number.isFinite(info.usd)
-                ? info.usd
-                : null;
-            if (newPrice === null) return coin;
-            const newChange =
-              typeof info.usd_24h_change === "number" &&
-              Number.isFinite(info.usd_24h_change)
-                ? info.usd_24h_change
-                : coin.priceChange24h;
-            // Regenerate mini price history anchored at new price
-            const newHistory: number[] = [];
-            let p = newPrice * (0.93 + Math.random() * 0.08);
-            for (let i = 0; i < 20; i++) {
-              p = p * (1 + (Math.random() - 0.49) * 0.025);
-              newHistory.push(p);
-            }
-            newHistory[newHistory.length - 1] = newPrice;
-            return {
-              ...coin,
-              currentPrice: newPrice,
-              priceChange24h: newChange,
-              miniPriceHistory: newHistory,
-            };
-          }),
-        );
       })
       .catch(() => {
-        // Silently fall back to simulated data
+        // fall back to initCoins() already in state
       });
   }, []);
 
@@ -116,14 +146,6 @@ export default function App() {
       (prev) => coins.find((c) => c.symbol === prev.symbol) ?? prev,
     );
   }, [coins]);
-
-  // Fluctuate prices every 3 seconds
-  useEffect(() => {
-    const id = setInterval(() => {
-      setCoins((prev) => fluctuateCoins(prev));
-    }, 3000);
-    return () => clearInterval(id);
-  }, []);
 
   const handleAddWatch = useCallback(
     (symbol: string) => {
@@ -209,18 +231,18 @@ export default function App() {
         <div className="relative flex-1">
           <Search
             className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3"
-            style={{ color: "oklch(0.62 0.015 240)" }}
+            style={{ color: "oklch(0.72 0.015 240)" }}
           />
           <input
             data-ocid="mobile.search_input"
             type="text"
-            placeholder="Search coins..."
+            placeholder="Search 300+ coins..."
             value={mobileSearch}
             onChange={(e) => setMobileSearch(e.target.value)}
             className="w-full pl-6 pr-2 py-1.5 rounded text-xs outline-none border border-border"
             style={{
               backgroundColor: "oklch(0.14 0.014 243)",
-              color: "oklch(0.93 0.008 240)",
+              color: "oklch(0.95 0.008 240)",
             }}
           />
         </div>
@@ -236,7 +258,7 @@ export default function App() {
             className="w-28 h-7 text-xs border-border shrink-0"
             style={{
               backgroundColor: "oklch(0.14 0.014 243)",
-              color: "oklch(0.93 0.008 240)",
+              color: "oklch(0.95 0.008 240)",
             }}
           >
             <SelectValue />
@@ -283,7 +305,10 @@ export default function App() {
         </div>
 
         {/* Center Main */}
-        <div className="flex-1 overflow-y-auto" style={{ minWidth: 0 }}>
+        <div
+          className="flex-1 overflow-y-auto pb-14 md:pb-0"
+          style={{ minWidth: 0 }}
+        >
           {activeTab === "Dashboard" && (
             <CoinDetailMain
               coin={selectedCoin}
@@ -311,7 +336,7 @@ export default function App() {
       </div>
 
       {/* Mobile: Right panel stacked below */}
-      <div className="md:hidden">
+      <div className="md:hidden pb-14">
         <RightPanel coins={coins} selectedCoin={selectedCoin} />
       </div>
 
@@ -319,7 +344,7 @@ export default function App() {
         className="border-t border-border px-4 py-3 text-center"
         style={{ backgroundColor: "oklch(0.11 0.013 243)" }}
       >
-        <p className="text-xs" style={{ color: "oklch(0.45 0.01 240)" }}>
+        <p className="text-xs" style={{ color: "oklch(0.55 0.01 240)" }}>
           © {new Date().getFullYear()}. Built with ❤️ using{" "}
           <a
             href={`https://caffeine.ai?utm_source=caffeine-footer&utm_medium=referral&utm_content=${encodeURIComponent(window.location.hostname)}`}
@@ -335,6 +360,40 @@ export default function App() {
           </span>
         </p>
       </footer>
+
+      {/* Mobile bottom nav */}
+      <nav
+        className="md:hidden fixed bottom-0 left-0 right-0 z-50 flex border-t border-border"
+        style={{ backgroundColor: "oklch(0.11 0.013 243)" }}
+      >
+        {(["Dashboard", "Market", "Signals", "Portfolio"] as TabName[]).map(
+          (tab) => {
+            const isActive = activeTab === tab;
+            return (
+              <button
+                key={tab}
+                type="button"
+                data-ocid={`mobile.nav.${tab.toLowerCase()}.link`}
+                onClick={() => setActiveTab(tab)}
+                className="flex-1 flex flex-col items-center gap-0.5 py-2 text-xs font-medium transition-colors"
+                style={{
+                  color: isActive
+                    ? "oklch(0.67 0.18 243)"
+                    : "oklch(0.72 0.015 240)",
+                }}
+              >
+                <span style={{ fontSize: 11 }}>{tab}</span>
+                {isActive && (
+                  <span
+                    className="w-1 h-1 rounded-full"
+                    style={{ backgroundColor: "oklch(0.67 0.18 243)" }}
+                  />
+                )}
+              </button>
+            );
+          },
+        )}
+      </nav>
 
       <Toaster />
     </div>

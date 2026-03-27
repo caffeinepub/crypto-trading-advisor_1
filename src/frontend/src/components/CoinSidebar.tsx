@@ -105,7 +105,7 @@ export function CoinSidebar({
                 style={{
                   color: isActive
                     ? "oklch(0.67 0.18 243)"
-                    : "oklch(0.62 0.015 240)",
+                    : "oklch(0.72 0.015 240)",
                   backgroundColor: isActive
                     ? "oklch(0.67 0.18 243 / 0.1)"
                     : "transparent",
@@ -123,18 +123,18 @@ export function CoinSidebar({
         <div className="relative">
           <Search
             className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3"
-            style={{ color: "oklch(0.62 0.015 240)" }}
+            style={{ color: "oklch(0.72 0.015 240)" }}
           />
           <input
             data-ocid="sidebar.search_input"
             type="text"
-            placeholder="Search coins..."
+            placeholder="Search 300+ coins..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="w-full pl-6 pr-2 py-1.5 rounded text-xs outline-none border border-border"
             style={{
               backgroundColor: "oklch(0.14 0.014 243)",
-              color: "oklch(0.93 0.008 240)",
+              color: "oklch(0.95 0.008 240)",
             }}
           />
         </div>
@@ -144,11 +144,11 @@ export function CoinSidebar({
       <div className="flex items-center justify-between px-3 py-2">
         <span
           className="text-xs font-semibold tracking-wider"
-          style={{ color: "oklch(0.62 0.015 240)" }}
+          style={{ color: "oklch(0.72 0.015 240)" }}
         >
-          ASSETS
+          ASSETS ({filtered.length})
         </span>
-        <span className="text-xs" style={{ color: "oklch(0.62 0.015 240)" }}>
+        <span className="text-xs" style={{ color: "oklch(0.72 0.015 240)" }}>
           24H
         </span>
       </div>
@@ -195,7 +195,7 @@ export function CoinSidebar({
                 <div className="flex items-center justify-between mt-0.5">
                   <span
                     className="text-xs"
-                    style={{ color: "oklch(0.62 0.015 240)" }}
+                    style={{ color: "oklch(0.72 0.015 240)" }}
                   >
                     {coin.name.slice(0, 10)}
                   </span>
@@ -216,7 +216,7 @@ export function CoinSidebar({
           <div
             data-ocid="sidebar.empty_state"
             className="px-3 py-4 text-xs text-center"
-            style={{ color: "oklch(0.62 0.015 240)" }}
+            style={{ color: "oklch(0.72 0.015 240)" }}
           >
             No coins found
           </div>
