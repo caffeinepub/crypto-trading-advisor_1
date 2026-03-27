@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import {
   Area,
   AreaChart,
@@ -17,8 +17,9 @@ import {
 import type { CoinData } from "../data/coins";
 import { getSignalColor } from "../data/coins";
 import {
+  type TimeRange,
   formatPrice,
-  generateLongHistory,
+  generateHistoryForRange,
   generateMACDHistory,
   generateRSIHistory,
 } from "../utils/chartUtils";
@@ -39,6 +40,20 @@ const TOOLTIP_STYLE = {
 const GRID_COLOR = "oklch(0.2 0.014 243)";
 const GREEN = "#22e17a";
 const RED = "#ff4b4b";
+
+const TIME_RANGES: TimeRange[] = [
+  "1sec",
+  "1min",
+  "5min",
+  "10min",
+  "30min",
+  "1h",
+  "2h",
+  "3h",
+  "4h",
+  "5h",
+  "6h",
+];
 
 function SectionHeader({ title }: { title: string }) {
   return (
@@ -70,10 +85,12 @@ export function CoinDetailMain({
   onAddWatch,
   onRemoveWatch,
 }: Props) {
-  // biome-ignore lint/correctness/useExhaustiveDependencies: regenerate charts only when symbol changes
+  const [timeRange, setTimeRange] = useState<TimeRange>("1h");
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: regenerate charts only when symbol or timeRange changes
   const priceHistory = useMemo(
-    () => generateLongHistory(coin, 168),
-    [coin.symbol],
+    () => generateHistoryForRange(coin, timeRange),
+    [coin.symbol, timeRange],
   );
   const rsiHistory = useMemo(
     () => generateRSIHistory(priceHistory, coin.rsi),
@@ -91,7 +108,7 @@ export function CoinDetailMain({
     : "oklch(0.63 0.22 25)";
 
   const tickFormatter = (_val: string, idx: number) =>
-    idx % 24 === 0 ? (priceHistory[idx]?.time.split(" ")[0] ?? "") : "";
+    idx % 10 === 0 ? (priceHistory[idx]?.time ?? "") : "";
 
   const sellTarget = coin.currentPrice * 1.045;
   const stopLoss = coin.currentPrice * 0.955;
@@ -213,19 +230,45 @@ export function CoinDetailMain({
         </div>
       </div>
 
-      {/* Charts — constrained max width so they don't stretch too wide */}
+      {/* Charts */}
       <div className="flex-1 px-4 py-4 space-y-6" style={{ maxWidth: 820 }}>
         {/* Price Chart */}
         <div>
-          <SectionHeader title="PRICE CHART — 7D" />
-          <div className="flex items-center gap-2 mb-2">
-            <span
-              className="text-xs font-mono"
-              style={{ color: "oklch(0.62 0.015 240)" }}
-            >
-              Hourly
-            </span>
+          <SectionHeader title={`PRICE CHART — ${timeRange.toUpperCase()}`} />
+
+          {/* Time Range Selector */}
+          <div
+            className="flex gap-1 mb-3 overflow-x-auto pb-1"
+            style={{ flexWrap: "nowrap" }}
+          >
+            {TIME_RANGES.map((range) => {
+              const isActive = range === timeRange;
+              return (
+                <button
+                  key={range}
+                  type="button"
+                  data-ocid="price_chart.tab"
+                  onClick={() => setTimeRange(range)}
+                  className="shrink-0 px-2.5 py-1 rounded-full text-xs font-mono transition-colors"
+                  style={{
+                    backgroundColor: isActive
+                      ? "oklch(0.67 0.18 243 / 0.2)"
+                      : "oklch(0.14 0.013 243)",
+                    border: isActive
+                      ? "1px solid oklch(0.67 0.18 243)"
+                      : "1px solid oklch(0.22 0.014 243)",
+                    color: isActive
+                      ? "oklch(0.67 0.18 243)"
+                      : "oklch(0.55 0.012 240)",
+                    cursor: "pointer",
+                  }}
+                >
+                  {range}
+                </button>
+              );
+            })}
           </div>
+
           <ResponsiveContainer width="100%" height={180}>
             <AreaChart
               data={priceHistory}

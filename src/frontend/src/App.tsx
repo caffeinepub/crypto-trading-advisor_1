@@ -7,8 +7,9 @@ import {
 } from "@/components/ui/select";
 import { Toaster } from "@/components/ui/sonner";
 import { Lock, Search, Settings2 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { AlertsView } from "./components/AlertsView";
 import { CoinDetailMain } from "./components/CoinDetailMain";
 import { CoinSidebar } from "./components/CoinSidebar";
 import { DisclaimerBanner } from "./components/DisclaimerBanner";
@@ -23,6 +24,7 @@ import {
   type SignalType,
   initCoins,
 } from "./data/coins";
+import { useAlerts } from "./hooks/useAlerts";
 import { useLockStore } from "./hooks/useLockStore";
 import {
   useAddToWatchlist,
@@ -30,7 +32,7 @@ import {
   useWatchlist,
 } from "./hooks/useQueries";
 
-type TabName = "Dashboard" | "Market" | "Signals" | "Portfolio";
+type TabName = "Dashboard" | "Market" | "Signals" | "Portfolio" | "Alerts";
 
 function marketItemToCoin(item: any): CoinData {
   const price = item.current_price ?? 0;
@@ -101,6 +103,7 @@ function marketItemToCoin(item: any): CoinData {
     miniPriceHistory: history,
     volume24h: item.total_volume ?? 0,
     iconColor,
+    geckoId: item.id as string,
   };
 }
 
@@ -112,46 +115,110 @@ export default function App() {
   const [mobileSearch, setMobileSearch] = useState("");
   const [activeTab, setActiveTab] = useState<TabName>("Dashboard");
   const [lockSettingsOpen, setLockSettingsOpen] = useState(false);
+  const initialLoadDone = useRef(false);
 
   const { data: watchlist } = useWatchlist();
   const addToWatchlist = useAddToWatchlist();
   const removeFromWatchlist = useRemoveFromWatchlist();
   const { isLocked, isEnabled, lockApp, unlockApp } = useLockStore();
+  const { checkAlerts } = useAlerts();
 
-  // Fetch top 1500 coins from CoinGecko on mount (10 pages × 150)
-  useEffect(() => {
-    const pages = Array.from({ length: 10 }, (_, i) =>
-      fetch(
-        `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=150&page=${i + 1}&sparkline=false&price_change_percentage=24h`,
-      ).then((r) => r.json()),
-    );
-    Promise.allSettled(pages)
-      .then((results) => {
-        const all = results.flatMap((r) =>
-          r.status === "fulfilled" && Array.isArray(r.value) ? r.value : [],
+  // Fetch all 1500 coins (10 pages × 150) from CoinGecko
+  const fetchAllCoins = useCallback(async () => {
+    const delay = (ms: number) => new Promise((res) => setTimeout(res, ms));
+    const allItems: any[] = [];
+    const seen = new Set<string>();
+
+    for (let page = 1; page <= 6; page++) {
+      try {
+        const res = await fetch(
+          `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=${page}&sparkline=false&price_change_percentage=24h`,
         );
-        const seen = new Set<string>();
-        const unique = all.filter((item) => {
+        const data = await res.json();
+        if (!Array.isArray(data)) break;
+        for (const item of data) {
           const sym = (item.symbol as string).toUpperCase();
-          if (seen.has(sym)) return false;
-          seen.add(sym);
-          return true;
-        });
-        if (unique.length > 0) {
-          const newCoins = unique.map(marketItemToCoin);
-          setCoins(newCoins);
-          setSelectedCoin(newCoins[0]);
+          if (!seen.has(sym)) {
+            seen.add(sym);
+            allItems.push(item);
+          }
         }
-      })
-      .catch(() => {});
+        const newCoins = allItems.map(marketItemToCoin);
+        setCoins(newCoins);
+        if (!initialLoadDone.current && newCoins.length > 0) {
+          setSelectedCoin(newCoins[0]);
+          initialLoadDone.current = true;
+          toast.success(`Loading coins... (${newCoins.length} so far)`);
+        }
+      } catch {
+        // ignore page errors, continue
+      }
+      if (page < 6) await delay(600);
+    }
   }, []);
 
-  // Keep selectedCoin in sync with coins updates
+  // Initial fetch + refresh every 60 seconds
+  useEffect(() => {
+    fetchAllCoins();
+    const interval = setInterval(fetchAllCoins, 60_000);
+    return () => clearInterval(interval);
+  }, [fetchAllCoins]);
+
+  // Keep selectedCoin in sync with coins list updates
   useEffect(() => {
     setSelectedCoin(
       (prev) => coins.find((c) => c.symbol === prev.symbol) ?? prev,
     );
   }, [coins]);
+
+  // Check alerts whenever coins update
+  useEffect(() => {
+    checkAlerts(coins);
+  }, [coins, checkAlerts]);
+
+  // Live price for selected coin every 10 seconds
+  useEffect(() => {
+    const geckoId = selectedCoin.geckoId;
+    if (!geckoId) return;
+
+    const fetchLivePrice = async () => {
+      try {
+        const res = await fetch(
+          `https://api.coingecko.com/api/v3/simple/price?ids=${geckoId}&vs_currencies=usd&include_24hr_change=true`,
+        );
+        const data = await res.json();
+        const entry = data[geckoId];
+        if (!entry) return;
+        const livePrice: number = entry.usd ?? 0;
+        const liveChange: number = entry.usd_24h_change ?? 0;
+        if (livePrice <= 0) return;
+
+        setCoins((prev) =>
+          prev.map((c) =>
+            c.geckoId === geckoId
+              ? {
+                  ...c,
+                  currentPrice: livePrice,
+                  priceChange24h: liveChange,
+                  miniPriceHistory: [...c.miniPriceHistory.slice(1), livePrice],
+                }
+              : c,
+          ),
+        );
+        setSelectedCoin((prev) =>
+          prev.geckoId === geckoId
+            ? { ...prev, currentPrice: livePrice, priceChange24h: liveChange }
+            : prev,
+        );
+      } catch {
+        // silently ignore
+      }
+    };
+
+    fetchLivePrice();
+    const interval = setInterval(fetchLivePrice, 10_000);
+    return () => clearInterval(interval);
+  }, [selectedCoin.geckoId]);
 
   const handleAddWatch = useCallback(
     (symbol: string) => {
@@ -244,6 +311,16 @@ export default function App() {
           >
             CoinAlert
           </span>
+          {/* LIVE indicator */}
+          <div className="flex items-center gap-1">
+            <span className="live-dot" />
+            <span
+              className="text-xs font-bold"
+              style={{ color: "oklch(0.72 0.2 145)", fontSize: 9 }}
+            >
+              LIVE
+            </span>
+          </div>
         </div>
         <div className="relative flex-1">
           <Search
@@ -331,8 +408,18 @@ export default function App() {
         </button>
       </div>
 
-      {/* Desktop lock buttons (top right) */}
+      {/* Desktop lock buttons + LIVE indicator (top right) */}
       <div className="hidden lg:flex items-center gap-2 absolute top-2 right-4 z-40">
+        {/* LIVE indicator */}
+        <div className="flex items-center gap-1.5 mr-1">
+          <span className="live-dot" />
+          <span
+            className="text-xs font-bold tracking-wider"
+            style={{ color: "oklch(0.72 0.2 145)" }}
+          >
+            LIVE
+          </span>
+        </div>
         <button
           type="button"
           data-ocid="lock.open_modal_button"
@@ -409,6 +496,7 @@ export default function App() {
             <SignalsView coins={coins} onSelectCoin={handleSelectCoinAndDash} />
           )}
           {activeTab === "Portfolio" && <PortfolioView coins={coins} />}
+          {activeTab === "Alerts" && <AlertsView coins={coins} />}
         </div>
       </div>
 
@@ -438,45 +526,44 @@ export default function App() {
         className="lg:hidden fixed bottom-0 left-0 right-0 z-50 flex border-t border-border"
         style={{ backgroundColor: "oklch(0.11 0.013 243)" }}
       >
-        {(["Dashboard", "Market", "Signals", "Portfolio"] as TabName[]).map(
-          (tab) => {
-            const isActive = activeTab === tab;
-            const icons: Record<TabName, string> = {
-              Dashboard: "📊",
-              Market: "📈",
-              Signals: "🔔",
-              Portfolio: "💼",
-            };
-            return (
-              <button
-                key={tab}
-                type="button"
-                data-ocid={`nav.${tab.toLowerCase()}.link`}
-                onClick={() => setActiveTab(tab)}
-                className="flex-1 flex flex-col items-center justify-center gap-0.5 transition-colors"
-                style={{
-                  minHeight: 56,
-                  color: isActive
-                    ? "oklch(0.67 0.18 243)"
-                    : "oklch(0.72 0.015 240)",
-                  backgroundColor: isActive
-                    ? "oklch(0.67 0.18 243 / 0.08)"
-                    : "transparent",
-                  borderTop: isActive
-                    ? "2px solid oklch(0.67 0.18 243)"
-                    : "2px solid transparent",
-                }}
-              >
-                <span style={{ fontSize: 18 }}>{icons[tab]}</span>
-                <span
-                  style={{ fontSize: 10, fontWeight: isActive ? 700 : 400 }}
-                >
-                  {tab}
-                </span>
-              </button>
-            );
-          },
-        )}
+        {(
+          ["Dashboard", "Market", "Signals", "Portfolio", "Alerts"] as TabName[]
+        ).map((tab) => {
+          const isActive = activeTab === tab;
+          const icons: Record<TabName, string> = {
+            Dashboard: "📊",
+            Market: "📈",
+            Signals: "📡",
+            Portfolio: "💼",
+            Alerts: "🔔",
+          };
+          return (
+            <button
+              key={tab}
+              type="button"
+              data-ocid={`nav.${tab.toLowerCase()}.link`}
+              onClick={() => setActiveTab(tab)}
+              className="flex-1 flex flex-col items-center justify-center gap-0.5 transition-colors"
+              style={{
+                minHeight: 56,
+                color: isActive
+                  ? "oklch(0.67 0.18 243)"
+                  : "oklch(0.72 0.015 240)",
+                backgroundColor: isActive
+                  ? "oklch(0.67 0.18 243 / 0.08)"
+                  : "transparent",
+                borderTop: isActive
+                  ? "2px solid oklch(0.67 0.18 243)"
+                  : "2px solid transparent",
+              }}
+            >
+              <span style={{ fontSize: 18 }}>{icons[tab]}</span>
+              <span style={{ fontSize: 10, fontWeight: isActive ? 700 : 400 }}>
+                {tab}
+              </span>
+            </button>
+          );
+        })}
       </nav>
 
       {/* Lock Settings modal */}

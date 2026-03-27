@@ -17,6 +17,7 @@ export interface CoinData {
   miniPriceHistory: number[];
   volume24h: number;
   iconColor: string;
+  geckoId?: string;
 }
 
 const BASE_COINS: Omit<CoinData, "miniPriceHistory">[] = [

@@ -3,7 +3,7 @@ import { useState } from "react";
 import type { CoinData } from "../data/coins";
 import { formatPrice } from "../utils/chartUtils";
 
-type TabName = "Dashboard" | "Market" | "Signals" | "Portfolio";
+type TabName = "Dashboard" | "Market" | "Signals" | "Portfolio" | "Alerts";
 
 interface CoinSidebarProps {
   coins: CoinData[];
@@ -92,30 +92,30 @@ export function CoinSidebar({
 
       {/* Nav tabs */}
       <nav className="flex flex-col px-2 py-2 gap-0.5 border-b border-border">
-        {(["Dashboard", "Market", "Signals", "Portfolio"] as TabName[]).map(
-          (tab) => {
-            const isActive = tab === activeTab;
-            return (
-              <button
-                type="button"
-                key={tab}
-                data-ocid={`nav.${tab.toLowerCase()}.link`}
-                onClick={() => onTabChange(tab)}
-                className="text-left text-xs px-2 py-1.5 rounded transition-colors"
-                style={{
-                  color: isActive
-                    ? "oklch(0.67 0.18 243)"
-                    : "oklch(0.72 0.015 240)",
-                  backgroundColor: isActive
-                    ? "oklch(0.67 0.18 243 / 0.1)"
-                    : "transparent",
-                }}
-              >
-                {tab}
-              </button>
-            );
-          },
-        )}
+        {(
+          ["Dashboard", "Market", "Signals", "Portfolio", "Alerts"] as TabName[]
+        ).map((tab) => {
+          const isActive = tab === activeTab;
+          return (
+            <button
+              type="button"
+              key={tab}
+              data-ocid={`nav.${tab.toLowerCase()}.link`}
+              onClick={() => onTabChange(tab)}
+              className="text-left text-xs px-2 py-1.5 rounded transition-colors"
+              style={{
+                color: isActive
+                  ? "oklch(0.67 0.18 243)"
+                  : "oklch(0.72 0.015 240)",
+                backgroundColor: isActive
+                  ? "oklch(0.67 0.18 243 / 0.1)"
+                  : "transparent",
+              }}
+            >
+              {tab}
+            </button>
+          );
+        })}
       </nav>
 
       {/* Search */}
