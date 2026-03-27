@@ -6,15 +6,16 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Toaster } from "@/components/ui/sonner";
-import { Search } from "lucide-react";
+import { Lock, Search, Settings2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { CoinDetailMain } from "./components/CoinDetailMain";
 import { CoinSidebar } from "./components/CoinSidebar";
 import { DisclaimerBanner } from "./components/DisclaimerBanner";
+import { LockScreen } from "./components/LockScreen";
+import { LockSettings } from "./components/LockSettings";
 import { MarketView } from "./components/MarketView";
 import { PortfolioView } from "./components/PortfolioView";
-import { RightPanel } from "./components/RightPanel";
 import { SignalsView } from "./components/SignalsView";
 import {
   type CoinData,
@@ -22,6 +23,7 @@ import {
   type SignalType,
   initCoins,
 } from "./data/coins";
+import { useLockStore } from "./hooks/useLockStore";
 import {
   useAddToWatchlist,
   useRemoveFromWatchlist,
@@ -109,35 +111,39 @@ export default function App() {
   );
   const [mobileSearch, setMobileSearch] = useState("");
   const [activeTab, setActiveTab] = useState<TabName>("Dashboard");
+  const [lockSettingsOpen, setLockSettingsOpen] = useState(false);
 
   const { data: watchlist } = useWatchlist();
   const addToWatchlist = useAddToWatchlist();
   const removeFromWatchlist = useRemoveFromWatchlist();
+  const { isLocked, isEnabled, lockApp, unlockApp } = useLockStore();
 
-  // Fetch top 300 coins from CoinGecko on mount
+  // Fetch top 1500 coins from CoinGecko on mount (10 pages × 150)
   useEffect(() => {
-    Promise.all([
+    const pages = Array.from({ length: 10 }, (_, i) =>
       fetch(
-        "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=150&page=1&sparkline=false&price_change_percentage=24h",
+        `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=150&page=${i + 1}&sparkline=false&price_change_percentage=24h`,
       ).then((r) => r.json()),
-      fetch(
-        "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=150&page=2&sparkline=false&price_change_percentage=24h",
-      ).then((r) => r.json()),
-    ])
-      .then(([page1, page2]) => {
-        const all = [
-          ...(Array.isArray(page1) ? page1 : []),
-          ...(Array.isArray(page2) ? page2 : []),
-        ];
-        if (all.length > 0) {
-          const newCoins = all.map(marketItemToCoin);
+    );
+    Promise.allSettled(pages)
+      .then((results) => {
+        const all = results.flatMap((r) =>
+          r.status === "fulfilled" && Array.isArray(r.value) ? r.value : [],
+        );
+        const seen = new Set<string>();
+        const unique = all.filter((item) => {
+          const sym = (item.symbol as string).toUpperCase();
+          if (seen.has(sym)) return false;
+          seen.add(sym);
+          return true;
+        });
+        if (unique.length > 0) {
+          const newCoins = unique.map(marketItemToCoin);
           setCoins(newCoins);
           setSelectedCoin(newCoins[0]);
         }
       })
-      .catch(() => {
-        // fall back to initCoins() already in state
-      });
+      .catch(() => {});
   }, []);
 
   // Keep selectedCoin in sync with coins updates
@@ -182,6 +188,14 @@ export default function App() {
     setActiveTab("Dashboard");
   };
 
+  const handleLockIconClick = () => {
+    if (isEnabled) {
+      lockApp();
+    } else {
+      setLockSettingsOpen(true);
+    }
+  };
+
   return (
     <div
       className="flex flex-col"
@@ -191,6 +205,9 @@ export default function App() {
         overflowX: "hidden",
       }}
     >
+      {/* Lock screen overlay */}
+      {isLocked && <LockScreen onUnlock={unlockApp} />}
+
       <DisclaimerBanner />
 
       {/* Mobile top bar */}
@@ -222,7 +239,7 @@ export default function App() {
             </svg>
           </div>
           <span
-            className="font-display font-bold text-sm"
+            className="font-bold text-sm"
             style={{ color: "oklch(0.67 0.18 243)" }}
           >
             CoinAlert
@@ -236,7 +253,7 @@ export default function App() {
           <input
             data-ocid="mobile.search_input"
             type="text"
-            placeholder="Search 300+ coins..."
+            placeholder="Search 1500+ coins..."
             value={mobileSearch}
             onChange={(e) => setMobileSearch(e.target.value)}
             className="w-full pl-6 pr-2 py-1.5 rounded text-xs outline-none border border-border"
@@ -269,7 +286,7 @@ export default function App() {
               borderColor: "oklch(0.22 0.016 243)",
             }}
           >
-            {filteredMobileCoins.map((coin) => (
+            {filteredMobileCoins.slice(0, 200).map((coin) => (
               <SelectItem
                 key={coin.symbol}
                 value={coin.symbol}
@@ -280,6 +297,74 @@ export default function App() {
             ))}
           </SelectContent>
         </Select>
+
+        {/* Lock icon - mobile */}
+        <button
+          type="button"
+          data-ocid="lock.open_modal_button"
+          onClick={handleLockIconClick}
+          className="shrink-0 w-7 h-7 flex items-center justify-center rounded-lg transition-colors"
+          style={{
+            backgroundColor: isEnabled
+              ? "oklch(0.67 0.18 243 / 0.15)"
+              : "oklch(0.16 0.014 243)",
+            border: "1px solid oklch(0.26 0.016 243)",
+            color: isEnabled ? "oklch(0.67 0.18 243)" : "oklch(0.6 0.01 240)",
+          }}
+          title={isEnabled ? "Lock app" : "Set up app lock"}
+        >
+          <Lock className="w-3.5 h-3.5" />
+        </button>
+        <button
+          type="button"
+          data-ocid="lock.secondary_button"
+          onClick={() => setLockSettingsOpen(true)}
+          className="shrink-0 w-7 h-7 flex items-center justify-center rounded-lg transition-colors"
+          style={{
+            backgroundColor: "oklch(0.16 0.014 243)",
+            border: "1px solid oklch(0.26 0.016 243)",
+            color: "oklch(0.6 0.01 240)",
+          }}
+          title="Lock settings"
+        >
+          <Settings2 className="w-3.5 h-3.5" />
+        </button>
+      </div>
+
+      {/* Desktop lock buttons (top right) */}
+      <div className="hidden lg:flex items-center gap-2 absolute top-2 right-4 z-40">
+        <button
+          type="button"
+          data-ocid="lock.open_modal_button"
+          onClick={handleLockIconClick}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors"
+          style={{
+            backgroundColor: isEnabled
+              ? "oklch(0.67 0.18 243 / 0.15)"
+              : "oklch(0.16 0.014 243)",
+            border: "1px solid oklch(0.26 0.016 243)",
+            color: isEnabled ? "oklch(0.67 0.18 243)" : "oklch(0.72 0.015 240)",
+          }}
+          title={isEnabled ? "Lock app now" : "Set up app lock"}
+        >
+          <Lock className="w-3.5 h-3.5" />
+          {isEnabled ? "Lock" : "Setup Lock"}
+        </button>
+        <button
+          type="button"
+          data-ocid="lock.secondary_button"
+          onClick={() => setLockSettingsOpen(true)}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors"
+          style={{
+            backgroundColor: "oklch(0.16 0.014 243)",
+            border: "1px solid oklch(0.26 0.016 243)",
+            color: "oklch(0.72 0.015 240)",
+          }}
+          title="Lock settings"
+        >
+          <Settings2 className="w-3.5 h-3.5" />
+          Lock Settings
+        </button>
       </div>
 
       {/* Centered max-width wrapper */}
@@ -304,9 +389,9 @@ export default function App() {
           />
         </div>
 
-        {/* Center Main */}
+        {/* Main Content */}
         <div
-          className="flex-1 overflow-y-auto pb-14 md:pb-0"
+          className="flex-1 overflow-y-auto pb-16 lg:pb-0"
           style={{ minWidth: 0 }}
         >
           {activeTab === "Dashboard" && (
@@ -325,19 +410,6 @@ export default function App() {
           )}
           {activeTab === "Portfolio" && <PortfolioView coins={coins} />}
         </div>
-
-        {/* Right Sidebar - shown on md+ */}
-        <div
-          className="hidden md:flex flex-col"
-          style={{ height: "calc(100vh - 56px)", position: "sticky", top: 56 }}
-        >
-          <RightPanel coins={coins} selectedCoin={selectedCoin} />
-        </div>
-      </div>
-
-      {/* Mobile: Right panel stacked below */}
-      <div className="md:hidden pb-14">
-        <RightPanel coins={coins} selectedCoin={selectedCoin} />
       </div>
 
       <footer
@@ -363,37 +435,55 @@ export default function App() {
 
       {/* Mobile bottom nav */}
       <nav
-        className="md:hidden fixed bottom-0 left-0 right-0 z-50 flex border-t border-border"
+        className="lg:hidden fixed bottom-0 left-0 right-0 z-50 flex border-t border-border"
         style={{ backgroundColor: "oklch(0.11 0.013 243)" }}
       >
         {(["Dashboard", "Market", "Signals", "Portfolio"] as TabName[]).map(
           (tab) => {
             const isActive = activeTab === tab;
+            const icons: Record<TabName, string> = {
+              Dashboard: "📊",
+              Market: "📈",
+              Signals: "🔔",
+              Portfolio: "💼",
+            };
             return (
               <button
                 key={tab}
                 type="button"
-                data-ocid={`mobile.nav.${tab.toLowerCase()}.link`}
+                data-ocid={`nav.${tab.toLowerCase()}.link`}
                 onClick={() => setActiveTab(tab)}
-                className="flex-1 flex flex-col items-center gap-0.5 py-2 text-xs font-medium transition-colors"
+                className="flex-1 flex flex-col items-center justify-center gap-0.5 transition-colors"
                 style={{
+                  minHeight: 56,
                   color: isActive
                     ? "oklch(0.67 0.18 243)"
                     : "oklch(0.72 0.015 240)",
+                  backgroundColor: isActive
+                    ? "oklch(0.67 0.18 243 / 0.08)"
+                    : "transparent",
+                  borderTop: isActive
+                    ? "2px solid oklch(0.67 0.18 243)"
+                    : "2px solid transparent",
                 }}
               >
-                <span style={{ fontSize: 11 }}>{tab}</span>
-                {isActive && (
-                  <span
-                    className="w-1 h-1 rounded-full"
-                    style={{ backgroundColor: "oklch(0.67 0.18 243)" }}
-                  />
-                )}
+                <span style={{ fontSize: 18 }}>{icons[tab]}</span>
+                <span
+                  style={{ fontSize: 10, fontWeight: isActive ? 700 : 400 }}
+                >
+                  {tab}
+                </span>
               </button>
             );
           },
         )}
       </nav>
+
+      {/* Lock Settings modal */}
+      <LockSettings
+        open={lockSettingsOpen}
+        onClose={() => setLockSettingsOpen(false)}
+      />
 
       <Toaster />
     </div>
