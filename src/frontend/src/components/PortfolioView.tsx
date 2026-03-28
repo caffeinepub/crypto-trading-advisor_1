@@ -2,7 +2,9 @@ import { Plus, Search, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { CoinData } from "../data/coins";
 import { getSignalColor } from "../data/coins";
+import { cloudLoad, cloudSave } from "../hooks/useCloudStorage";
 import { formatPrice } from "../utils/chartUtils";
+import { AccountKeyCard } from "./AccountKeyCard";
 import { CoinAvatar } from "./CoinSidebar";
 
 interface Holding {
@@ -26,29 +28,41 @@ interface Props {
 
 const HOLDINGS_KEY = "crypto_portfolio";
 const TRADES_KEY = "crypto_trades";
+const CLOUD_HOLDINGS_KEY = "portfolio_holdings";
+const CLOUD_TRADES_KEY = "portfolio_trades";
 
-function loadHoldings(): Holding[] {
+function loadHoldingsLocal(): Holding[] {
   try {
-    const raw = localStorage.getItem(HOLDINGS_KEY);
+    const raw =
+      localStorage.getItem(`cloud_${CLOUD_HOLDINGS_KEY}`) ||
+      localStorage.getItem(HOLDINGS_KEY);
     if (raw) return JSON.parse(raw);
   } catch {}
   return [];
 }
 
-function saveHoldings(holdings: Holding[]) {
-  localStorage.setItem(HOLDINGS_KEY, JSON.stringify(holdings));
-}
-
-function loadTrades(): Trade[] {
+function loadTradesLocal(): Trade[] {
   try {
-    const raw = localStorage.getItem(TRADES_KEY);
+    const raw =
+      localStorage.getItem(`cloud_${CLOUD_TRADES_KEY}`) ||
+      localStorage.getItem(TRADES_KEY);
     if (raw) return JSON.parse(raw);
   } catch {}
   return [];
 }
 
-function saveTrades(trades: Trade[]) {
-  localStorage.setItem(TRADES_KEY, JSON.stringify(trades));
+function persistHoldings(holdings: Holding[]) {
+  const json = JSON.stringify(holdings);
+  localStorage.setItem(HOLDINGS_KEY, json);
+  localStorage.setItem(`cloud_${CLOUD_HOLDINGS_KEY}`, json);
+  cloudSave(CLOUD_HOLDINGS_KEY, holdings);
+}
+
+function persistTrades(trades: Trade[]) {
+  const json = JSON.stringify(trades);
+  localStorage.setItem(TRADES_KEY, json);
+  localStorage.setItem(`cloud_${CLOUD_TRADES_KEY}`, json);
+  cloudSave(CLOUD_TRADES_KEY, trades);
 }
 
 type SubTab = "Holdings" | "Trades";
@@ -57,15 +71,46 @@ export function PortfolioView({ coins }: Props) {
   const [subTab, setSubTab] = useState<SubTab>("Holdings");
 
   // --- Holdings ---
-  const [holdings, setHoldings] = useState<Holding[]>(loadHoldings);
+  const [holdings, setHoldings] = useState<Holding[]>(loadHoldingsLocal);
   const [showAdd, setShowAdd] = useState(false);
   const [addSearch, setAddSearch] = useState("");
   const [addSymbol, setAddSymbol] = useState("");
   const [addAmount, setAddAmount] = useState("");
 
+  // --- Trades ---
+  const [trades, setTrades] = useState<Trade[]>(loadTradesLocal);
+  const [showTradeForm, setShowTradeForm] = useState(false);
+  const [tradeSearch, setTradeSearch] = useState("");
+  const [tradeSymbol, setTradeSymbol] = useState("");
+  const [tradeType, setTradeType] = useState<"buy" | "sell">("buy");
+  const [tradeAmount, setTradeAmount] = useState("");
+  const [tradePrice, setTradePrice] = useState("");
+  const [tradeDate, setTradeDate] = useState(
+    new Date().toISOString().split("T")[0],
+  );
+  const [tradeNotes, setTradeNotes] = useState("");
+
+  // Load holdings from cloud on mount
   useEffect(() => {
-    saveHoldings(holdings);
-  }, [holdings]);
+    cloudLoad<Holding[]>(CLOUD_HOLDINGS_KEY, [])
+      .then((data) => {
+        if (Array.isArray(data) && data.length > 0) {
+          setHoldings(data);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  // Load trades from cloud on mount
+  useEffect(() => {
+    cloudLoad<Trade[]>(CLOUD_TRADES_KEY, [])
+      .then((data) => {
+        if (Array.isArray(data) && data.length > 0) {
+          setTrades(data);
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   const enriched = holdings
     .map((h) => {
@@ -89,14 +134,18 @@ export function PortfolioView({ coins }: Props) {
     if (!addSymbol || !addAmount || Number(addAmount) <= 0) return;
     setHoldings((prev) => {
       const existing = prev.find((h) => h.symbol === addSymbol);
+      let next: Holding[];
       if (existing) {
-        return prev.map((h) =>
+        next = prev.map((h) =>
           h.symbol === addSymbol
             ? { ...h, amount: h.amount + Number(addAmount) }
             : h,
         );
+      } else {
+        next = [...prev, { symbol: addSymbol, amount: Number(addAmount) }];
       }
-      return [...prev, { symbol: addSymbol, amount: Number(addAmount) }];
+      persistHoldings(next);
+      return next;
     });
     setAddSymbol("");
     setAddAmount("");
@@ -105,25 +154,12 @@ export function PortfolioView({ coins }: Props) {
   };
 
   const handleRemoveHolding = (symbol: string) => {
-    setHoldings((prev) => prev.filter((h) => h.symbol !== symbol));
+    setHoldings((prev) => {
+      const next = prev.filter((h) => h.symbol !== symbol);
+      persistHoldings(next);
+      return next;
+    });
   };
-
-  // --- Trades ---
-  const [trades, setTrades] = useState<Trade[]>(loadTrades);
-  const [showTradeForm, setShowTradeForm] = useState(false);
-  const [tradeSearch, setTradeSearch] = useState("");
-  const [tradeSymbol, setTradeSymbol] = useState("");
-  const [tradeType, setTradeType] = useState<"buy" | "sell">("buy");
-  const [tradeAmount, setTradeAmount] = useState("");
-  const [tradePrice, setTradePrice] = useState("");
-  const [tradeDate, setTradeDate] = useState(
-    new Date().toISOString().split("T")[0],
-  );
-  const [tradeNotes, setTradeNotes] = useState("");
-
-  useEffect(() => {
-    saveTrades(trades);
-  }, [trades]);
 
   const filteredTradeCoins = coins
     .filter(
@@ -144,7 +180,11 @@ export function PortfolioView({ coins }: Props) {
       date: tradeDate,
       notes: tradeNotes || undefined,
     };
-    setTrades((prev) => [trade, ...prev]);
+    setTrades((prev) => {
+      const next = [trade, ...prev];
+      persistTrades(next);
+      return next;
+    });
     setTradeSymbol("");
     setTradeSearch("");
     setTradeAmount("");
@@ -154,7 +194,11 @@ export function PortfolioView({ coins }: Props) {
   };
 
   const handleRemoveTrade = (id: string) => {
-    setTrades((prev) => prev.filter((t) => t.id !== id));
+    setTrades((prev) => {
+      const next = prev.filter((t) => t.id !== id);
+      persistTrades(next);
+      return next;
+    });
   };
 
   // Performance summary
@@ -511,7 +555,7 @@ export function PortfolioView({ coins }: Props) {
                   className="text-xs"
                   style={{ color: "oklch(0.72 0.015 240)" }}
                 >
-                  Click "Add" to start building your portfolio
+                  Click &ldquo;Add&rdquo; to start building your portfolio
                 </p>
               </div>
             )}
@@ -847,7 +891,7 @@ export function PortfolioView({ coins }: Props) {
                   className="text-xs"
                   style={{ color: "oklch(0.72 0.015 240)" }}
                 >
-                  Click "Log Trade" to start tracking your trades
+                  Click &ldquo;Log Trade&rdquo; to start tracking your trades
                 </p>
               </div>
             )}
@@ -858,7 +902,7 @@ export function PortfolioView({ coins }: Props) {
                 trade.type === "buy"
                   ? (currentPrice - trade.entryPrice) * trade.amount
                   : 0;
-              const pnlPct =
+              const tradePnlPct =
                 trade.type === "buy" && trade.entryPrice > 0
                   ? ((currentPrice - trade.entryPrice) / trade.entryPrice) * 100
                   : 0;
@@ -939,7 +983,7 @@ export function PortfolioView({ coins }: Props) {
                               }}
                             >
                               {isGain ? "+" : ""}
-                              {pnlPct.toFixed(2)}%
+                              {tradePnlPct.toFixed(2)}%
                             </div>
                           </>
                         )}
@@ -973,7 +1017,7 @@ export function PortfolioView({ coins }: Props) {
                         className="text-xs"
                         style={{ color: "oklch(0.55 0.01 240)" }}
                       >
-                        ·
+                        &middot;
                       </span>
                       <span
                         className="text-xs"
@@ -990,11 +1034,14 @@ export function PortfolioView({ coins }: Props) {
         </>
       )}
 
+      {/* Account Key Card */}
+      <AccountKeyCard />
+
       <p
         className="text-xs text-center mt-4"
         style={{ color: "oklch(0.5 0.01 240)" }}
       >
-        Portfolio tracked locally. Not financial advice.
+        Portfolio backed by ICP canister. Not financial advice.
       </p>
     </div>
   );

@@ -9,6 +9,8 @@ export interface None {
 export type Option<T> = Some<T> | None;
 export interface backendInterface {
     addToWatchlist(symbol: string): Promise<boolean>;
+    getUserData(accountKey: string, dataKey: string): Promise<string | null>;
     getWatchlist(): Promise<Array<string>>;
     removeFromWatchlist(symbol: string): Promise<boolean>;
+    saveUserData(accountKey: string, dataKey: string, json: string): Promise<void>;
 }

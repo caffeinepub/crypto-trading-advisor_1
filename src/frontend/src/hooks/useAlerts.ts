@@ -1,6 +1,7 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import type { CoinData } from "../data/coins";
+import { cloudLoad, cloudSave } from "./useCloudStorage";
 
 export interface Alert {
   id: string;
@@ -17,26 +18,43 @@ export interface Alert {
 }
 
 const STORAGE_KEY = "crypto_alerts";
+const CLOUD_KEY = "price_alerts";
 
-function loadAlerts(): Alert[] {
+function loadAlertsLocal(): Alert[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw =
+      localStorage.getItem(`cloud_${CLOUD_KEY}`) ||
+      localStorage.getItem(STORAGE_KEY);
     if (raw) return JSON.parse(raw);
   } catch {}
   return [];
 }
 
-function saveAlerts(alerts: Alert[]) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(alerts));
+function persistAlerts(alerts: Alert[]) {
+  const json = JSON.stringify(alerts);
+  localStorage.setItem(STORAGE_KEY, json);
+  localStorage.setItem(`cloud_${CLOUD_KEY}`, json);
+  cloudSave(CLOUD_KEY, alerts);
 }
 
 export function useAlerts() {
-  const [alerts, setAlerts] = useState<Alert[]>(loadAlerts);
+  const [alerts, setAlerts] = useState<Alert[]>(loadAlertsLocal);
+
+  // Load from cloud on mount
+  useEffect(() => {
+    cloudLoad<Alert[]>(CLOUD_KEY, [])
+      .then((data) => {
+        if (Array.isArray(data) && data.length > 0) {
+          setAlerts(data);
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   const addAlert = useCallback((alert: Alert) => {
     setAlerts((prev) => {
       const next = [...prev, alert];
-      saveAlerts(next);
+      persistAlerts(next);
       return next;
     });
   }, []);
@@ -44,7 +62,7 @@ export function useAlerts() {
   const removeAlert = useCallback((id: string) => {
     setAlerts((prev) => {
       const next = prev.filter((a) => a.id !== id);
-      saveAlerts(next);
+      persistAlerts(next);
       return next;
     });
   }, []);
@@ -86,7 +104,7 @@ export function useAlerts() {
         }
         return alert;
       });
-      if (changed) saveAlerts(next);
+      if (changed) persistAlerts(next);
       return changed ? next : prev;
     });
   }, []);

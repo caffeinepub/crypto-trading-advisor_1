@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
+import { cloudLoad, cloudSave } from "./useCloudStorage";
 
 const KEYS = {
   enabled: "appLock_enabled",
   pinHash: "appLock_pinHash",
   biometricCredId: "appLock_biometricCredentialId",
 };
+
+const CLOUD_KEY = "lock_settings";
 
 async function sha256Hex(text: string): Promise<string> {
   const buf = await window.crypto.subtle.digest(
@@ -47,11 +50,34 @@ export function useLockStore() {
     }
   }, []);
 
+  // Load from cloud on mount
+  useEffect(() => {
+    cloudLoad<{ enabled: boolean; pinHash: string | null } | null>(
+      CLOUD_KEY,
+      null,
+    )
+      .then((data) => {
+        if (!data) return;
+        if (data.enabled && data.pinHash) {
+          localStorage.setItem(KEYS.enabled, "true");
+          localStorage.setItem(KEYS.pinHash, data.pinHash);
+          setIsEnabled(true);
+          setIsLocked(true);
+        } else if (!data.enabled) {
+          if (localStorage.getItem(KEYS.enabled) !== "true") {
+            setIsEnabled(false);
+          }
+        }
+      })
+      .catch(() => {});
+  }, []);
+
   const setupPin = useCallback(async (pin: string) => {
     const hash = await sha256Hex(pin);
     localStorage.setItem(KEYS.pinHash, hash);
     localStorage.setItem(KEYS.enabled, "true");
     setIsEnabled(true);
+    cloudSave(CLOUD_KEY, { enabled: true, pinHash: hash });
   }, []);
 
   const verifyPin = useCallback(async (pin: string): Promise<boolean> => {
@@ -138,6 +164,7 @@ export function useLockStore() {
     setIsEnabled(false);
     setHasBiometric(false);
     setIsLocked(false);
+    cloudSave(CLOUD_KEY, { enabled: false, pinHash: null });
   }, []);
 
   return {

@@ -1,34 +1,33 @@
 # Crypto Trading Advisor
 
 ## Current State
-Full crypto trading advisor app with CoinGecko live prices, Buy/Sell/Hold signals, portfolio, watchlist, and mobile-responsive layout. No authentication or app lock mechanism exists.
+All user data (portfolio holdings, trades, price alerts, and app lock PIN/biometric) is stored exclusively in browser `localStorage`. When the user clears browser history or site data, all settings are permanently lost.
+
+The backend canister only stores a shared watchlist with no per-user persistence.
 
 ## Requested Changes (Diff)
 
 ### Add
-- App Lock screen that appears on first load (if lock is enabled) and when user manually locks the app
-- Settings page / modal where users can:
-  - Set a numeric PIN or password to lock the app
-  - Enable fingerprint/biometric unlock (using Web Authentication API / navigator.credentials)
-  - Disable app lock
-- Lock screen UI with:
-  - PIN/password input field
-  - "Use Fingerprint" button (shown only if biometrics are set up and available)
-  - Unlock button
-- Lock icon in the app header/nav to manually lock the app
-- Lock settings stored in localStorage (hashed PIN, biometric credential ID)
+- Backend `saveUserData(key: Text, json: Text)` and `getUserData(key: Text)` canister functions for per-account cloud storage.
+- On first launch, generate a random UUID as the user's account key and save it to localStorage.
+- Load all data (portfolio, trades, alerts, lock settings) from canister on startup using the account key.
+- Save to canister on every change as primary storage (localStorage as secondary cache).
+- "Account Key" panel in settings showing the UUID with copy button + "Restore from key" input so users can recover data on new devices/after clearing browser data.
 
 ### Modify
-- App header or nav bar: add a lock icon button to trigger manual lock and open lock settings
+- `useLockStore`: read/write PIN hash and biometric cred from canister (via account key) in addition to localStorage.
+- `useAlerts`: read/write alerts from canister.
+- `PortfolioView`: read/write holdings and trades from canister.
+- App.tsx: initialize account key on startup, sync canister data.
 
 ### Remove
-- Nothing
+- None. Keep localStorage as a fast local cache, canister is source of truth.
 
 ## Implementation Plan
-1. Create `useLockStore` hook managing lock state in localStorage: isPinSet, isLocked, biometricEnabled
-2. Create `LockScreen` component: shows PIN input + optional fingerprint button, handles unlock
-3. Create `LockSettings` component/modal: set/change PIN, enable/disable biometric, enable/disable lock
-4. Wire biometric via `navigator.credentials.create` (registration) and `navigator.credentials.get` (auth) using WebAuthn with platform authenticator
-5. Hash PIN with subtle crypto (SHA-256) before storing
-6. Add lock icon to nav bar that locks app and opens settings
-7. Wrap main app content — if locked, show LockScreen instead
+1. Update `main.mo` to add `saveUserData(key, json)` and `getUserData(key)` functions using a stable HashMap.
+2. Create `src/frontend/src/hooks/useAccountKey.ts` — generates/retrieves UUID, provides save/load helpers that call canister.
+3. Create `src/frontend/src/hooks/useCloudStorage.ts` — wraps canister save/load with JSON parsing, debounced saves.
+4. Update `useLockStore.ts` to persist lock settings to canister.
+5. Update `useAlerts.ts` to persist alerts to canister.
+6. Update `PortfolioView.tsx` to persist holdings and trades to canister.
+7. Add Account Key recovery UI (small card in settings or footer with copy + restore input).

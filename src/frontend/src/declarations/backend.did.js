@@ -10,8 +10,14 @@ import { IDL } from '@icp-sdk/core/candid';
 
 export const idlService = IDL.Service({
   'addToWatchlist' : IDL.Func([IDL.Text], [IDL.Bool], []),
+  'getUserData' : IDL.Func(
+      [IDL.Text, IDL.Text],
+      [IDL.Opt(IDL.Text)],
+      ['query'],
+    ),
   'getWatchlist' : IDL.Func([], [IDL.Vec(IDL.Text)], ['query']),
   'removeFromWatchlist' : IDL.Func([IDL.Text], [IDL.Bool], []),
+  'saveUserData' : IDL.Func([IDL.Text, IDL.Text, IDL.Text], [], []),
 });
 
 export const idlInitArgs = [];
@@ -19,8 +25,14 @@ export const idlInitArgs = [];
 export const idlFactory = ({ IDL }) => {
   return IDL.Service({
     'addToWatchlist' : IDL.Func([IDL.Text], [IDL.Bool], []),
+    'getUserData' : IDL.Func(
+        [IDL.Text, IDL.Text],
+        [IDL.Opt(IDL.Text)],
+        ['query'],
+      ),
     'getWatchlist' : IDL.Func([], [IDL.Vec(IDL.Text)], ['query']),
     'removeFromWatchlist' : IDL.Func([IDL.Text], [IDL.Bool], []),
+    'saveUserData' : IDL.Func([IDL.Text, IDL.Text, IDL.Text], [], []),
   });
 };
 

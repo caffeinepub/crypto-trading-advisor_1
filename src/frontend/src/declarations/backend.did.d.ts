@@ -12,8 +12,10 @@ import type { Principal } from '@icp-sdk/core/principal';
 
 export interface _SERVICE {
   'addToWatchlist' : ActorMethod<[string], boolean>,
+  'getUserData' : ActorMethod<[string, string], [] | [string]>,
   'getWatchlist' : ActorMethod<[], Array<string>>,
   'removeFromWatchlist' : ActorMethod<[string], boolean>,
+  'saveUserData' : ActorMethod<[string, string, string], undefined>,
 }
 export declare const idlService: IDL.ServiceClass;
 export declare const idlInitArgs: IDL.Type[];
