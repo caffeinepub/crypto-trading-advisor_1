@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Area,
   AreaChart,
@@ -17,11 +17,16 @@ import {
 import type { CoinData } from "../data/coins";
 import { getSignalColor } from "../data/coins";
 import {
+  type MACDPoint,
+  type PricePoint,
+  type RSIPoint,
   type TimeRange,
+  buildMACDHistory,
+  buildRSIHistory,
+  computeRealMACD,
+  computeRealRSI,
   formatPrice,
-  generateHistoryForRange,
-  generateMACDHistory,
-  generateRSIHistory,
+  slicePricesForRange,
 } from "../utils/chartUtils";
 import { CoinAvatar } from "./CoinSidebar";
 
@@ -79,6 +84,13 @@ interface Props {
   onRemoveWatch: (symbol: string) => void;
 }
 
+// Cache raw price data per geckoId to avoid redundant API calls
+const priceCache = new Map<
+  string,
+  { data: [number, number][]; fetchedAt: number }
+>();
+const CACHE_TTL = 5 * 60_000; // 5 minutes
+
 export function CoinDetailMain({
   coin,
   isWatched,
@@ -86,20 +98,82 @@ export function CoinDetailMain({
   onRemoveWatch,
 }: Props) {
   const [timeRange, setTimeRange] = useState<TimeRange>("1h");
+  const [rawPrices, setRawPrices] = useState<[number, number][]>([]);
+  const [chartLoading, setChartLoading] = useState(false);
+  const abortRef = useRef<AbortController | null>(null);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: regenerate charts only when symbol or timeRange changes
-  const priceHistory = useMemo(
-    () => generateHistoryForRange(coin, timeRange),
-    [coin.symbol, timeRange],
-  );
-  const rsiHistory = useMemo(
-    () => generateRSIHistory(priceHistory, coin.rsi),
-    [priceHistory, coin.rsi],
-  );
-  const macdHistory = useMemo(
-    () => generateMACDHistory(priceHistory),
-    [priceHistory],
-  );
+  // Fetch real price history from CoinGecko when coin changes
+  useEffect(() => {
+    const geckoId = coin.geckoId;
+    if (!geckoId) return;
+
+    // Check cache
+    const cached = priceCache.get(geckoId);
+    if (cached && Date.now() - cached.fetchedAt < CACHE_TTL) {
+      setRawPrices(cached.data);
+      return;
+    }
+
+    // Abort previous request
+    if (abortRef.current) abortRef.current.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    setChartLoading(true);
+    // Fetch 2 days to cover all timeranges up to 6h with 5-min granularity
+    fetch(
+      `https://api.coingecko.com/api/v3/coins/${geckoId}/market_chart?vs_currency=usd&days=2&precision=6`,
+      { signal: controller.signal },
+    )
+      .then((r) => r.json())
+      .then((data) => {
+        if (controller.signal.aborted) return;
+        const prices: [number, number][] = data?.prices ?? [];
+        if (prices.length > 0) {
+          priceCache.set(geckoId, { data: prices, fetchedAt: Date.now() });
+          setRawPrices(prices);
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!controller.signal.aborted) setChartLoading(false);
+      });
+
+    return () => controller.abort();
+  }, [coin.geckoId]);
+
+  // Derive chart data from raw prices whenever rawPrices or timeRange changes
+  const priceHistory = useMemo<PricePoint[]>(() => {
+    if (rawPrices.length === 0) {
+      // Fallback: build from miniPriceHistory while loading
+      const now = Date.now();
+      return coin.miniPriceHistory.map((price, i) => ({
+        time: "",
+        price,
+        timestamp: now - (coin.miniPriceHistory.length - i) * 300_000,
+      }));
+    }
+    return slicePricesForRange(rawPrices, timeRange);
+  }, [rawPrices, timeRange, coin.miniPriceHistory]);
+
+  const rsiHistory = useMemo<RSIPoint[]>(() => {
+    const prices = priceHistory.map((p) => p.price);
+    const rsiValues = computeRealRSI(prices);
+    return buildRSIHistory(priceHistory, rsiValues);
+  }, [priceHistory]);
+
+  const macdHistory = useMemo<MACDPoint[]>(() => {
+    const prices = priceHistory.map((p) => p.price);
+    const macdValues = computeRealMACD(prices);
+    return buildMACDHistory(priceHistory, macdValues);
+  }, [priceHistory]);
+
+  // Compute live RSI from the fetched price data
+  const liveRsi = useMemo(() => {
+    const prices = priceHistory.map((p) => p.price);
+    const rsiValues = computeRealRSI(prices, 14);
+    return rsiValues[rsiValues.length - 1] ?? coin.rsi;
+  }, [priceHistory, coin.rsi]);
 
   const signalColor = getSignalColor(coin.signal);
   const isPositive = coin.priceChange24h >= 0;
@@ -113,7 +187,7 @@ export function CoinDetailMain({
   const sellTarget = coin.currentPrice * 1.045;
   const stopLoss = coin.currentPrice * 0.955;
   const rsiLabel =
-    coin.rsi >= 70 ? "Overbought" : coin.rsi <= 30 ? "Oversold" : "Neutral";
+    liveRsi >= 70 ? "Overbought" : liveRsi <= 30 ? "Oversold" : "Neutral";
 
   return (
     <div
@@ -203,7 +277,7 @@ export function CoinDetailMain({
             },
             {
               label: "RSI (14)",
-              value: coin.rsi.toFixed(1),
+              value: liveRsi.toFixed(1),
               color:
                 rsiLabel === "Neutral"
                   ? "oklch(0.85 0.175 82)"
@@ -234,7 +308,26 @@ export function CoinDetailMain({
       <div className="flex-1 px-4 py-4 space-y-6" style={{ maxWidth: 820 }}>
         {/* Price Chart */}
         <div>
-          <SectionHeader title={`PRICE CHART — ${timeRange.toUpperCase()}`} />
+          <div className="flex items-center gap-2 mb-2">
+            <span
+              className="text-xs font-semibold tracking-wider"
+              style={{ color: "oklch(0.62 0.015 240)" }}
+            >
+              PRICE CHART — {timeRange.toUpperCase()}
+            </span>
+            {chartLoading && (
+              <span
+                className="text-xs"
+                style={{ color: "oklch(0.55 0.18 243)" }}
+              >
+                Loading live data…
+              </span>
+            )}
+            <div
+              className="flex-1 h-px"
+              style={{ backgroundColor: "oklch(0.2 0.014 243)" }}
+            />
+          </div>
 
           {/* Time Range Selector */}
           <div
@@ -329,7 +422,7 @@ export function CoinDetailMain({
         {/* RSI Chart */}
         <div>
           <SectionHeader
-            title={`RSI (14) — ${coin.rsi.toFixed(1)} — ${rsiLabel}`}
+            title={`RSI (14) — ${liveRsi.toFixed(1)} — ${rsiLabel}`}
           />
           <ResponsiveContainer width="100%" height={100}>
             <LineChart
@@ -358,7 +451,7 @@ export function CoinDetailMain({
               />
               <Tooltip
                 contentStyle={TOOLTIP_STYLE}
-                formatter={(v) => [`${v}`, "RSI"]}
+                formatter={(v) => [`${(v as number).toFixed(1)}`, "RSI"]}
                 labelFormatter={(l) => String(l)}
               />
               <ReferenceLine

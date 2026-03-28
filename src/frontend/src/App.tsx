@@ -31,37 +31,62 @@ import {
   useRemoveFromWatchlist,
   useWatchlist,
 } from "./hooks/useQueries";
+import { computeRealRSI } from "./utils/chartUtils";
 
 type TabName = "Dashboard" | "Market" | "Signals" | "Portfolio" | "Alerts";
 
 function marketItemToCoin(item: any): CoinData {
   const price = item.current_price ?? 0;
   const change = item.price_change_percentage_24h ?? 0;
-  const seed = (item.symbol as string)
-    .split("")
-    .reduce((a: number, c: string) => a + c.charCodeAt(0), 0);
-  const rsi = 30 + (seed % 50);
-  const momentum = (seed % 100) - 50;
-  const signalIdx = seed % 5;
-  const signals: SignalType[] = [
-    "Strong Buy",
-    "Buy",
-    "Hold",
-    "Sell",
-    "Strong Sell",
-  ];
-  const signal = signals[signalIdx];
-  const strength = 40 + (seed % 50);
-  const maSignals: MASignal[] = ["buy", "neutral", "sell"];
-  const maSignal = maSignals[seed % 3];
 
-  const history: number[] = [];
-  let p = price * 0.95;
-  for (let i = 0; i < 20; i++) {
-    p = p * (1 + (((seed * (i + 1)) % 10) - 5) * 0.003);
-    history.push(Math.max(p, price * 0.001));
+  // Use real sparkline data if available (7-day hourly prices from CoinGecko)
+  const sparklinePrices: number[] = item.sparkline_in_7d?.price ?? [];
+  // Take last 20 points for miniPriceHistory; ensure last price matches live price
+  const rawHistory =
+    sparklinePrices.length >= 20
+      ? sparklinePrices.slice(-20)
+      : sparklinePrices.length > 0
+        ? sparklinePrices
+        : [price];
+  const history = [...rawHistory];
+  if (history.length > 0) history[history.length - 1] = price;
+
+  // Compute real RSI from sparkline prices (use all available data for accuracy)
+  const rsiValues =
+    sparklinePrices.length >= 15 ? computeRealRSI(sparklinePrices, 14) : null;
+  const rsi =
+    rsiValues && rsiValues.length > 0
+      ? Math.round(rsiValues[rsiValues.length - 1] * 10) / 10
+      : 50;
+
+  // Derive signal from real RSI and 24h price change
+  let signal: SignalType;
+  let strength: number;
+  let maSignal: MASignal;
+
+  if (rsi >= 70) {
+    signal = rsi >= 80 ? "Strong Sell" : "Sell";
+    strength = Math.min(95, Math.round(40 + (rsi - 70) * 2));
+    maSignal = "sell";
+  } else if (rsi <= 30) {
+    signal = rsi <= 20 ? "Strong Buy" : "Buy";
+    strength = Math.min(95, Math.round(40 + (30 - rsi) * 2));
+    maSignal = "buy";
+  } else if (rsi > 55 && change > 0) {
+    signal = "Buy";
+    strength = Math.round(40 + (rsi - 50) * 1.5);
+    maSignal = "buy";
+  } else if (rsi < 45 && change < 0) {
+    signal = "Sell";
+    strength = Math.round(40 + (50 - rsi) * 1.5);
+    maSignal = "sell";
+  } else {
+    signal = "Hold";
+    strength = Math.round(40 + Math.abs(rsi - 50) * 0.8);
+    maSignal = "neutral";
   }
-  history[history.length - 1] = price;
+
+  const momentum = change * 5;
 
   const colors = [
     "#F7931A",
@@ -85,7 +110,13 @@ function marketItemToCoin(item: any): CoinData {
     "#1E90FF",
     "#22C55E",
   ];
+  const seed = (item.symbol as string)
+    .split("")
+    .reduce((a: number, c: string) => a + c.charCodeAt(0), 0);
   const iconColor = colors[seed % colors.length];
+
+  const rsiLabel =
+    rsi >= 70 ? "Overbought" : rsi <= 30 ? "Oversold" : "Neutral";
 
   return {
     symbol: (item.symbol as string).toUpperCase(),
@@ -96,10 +127,10 @@ function marketItemToCoin(item: any): CoinData {
     maSignal,
     momentum,
     signal,
-    signalStrength: strength,
-    reasoning: `${item.name} market data. RSI at ${rsi}. Simulated signal for educational purposes.`,
-    entryStrategy: "This is simulated data. Not financial advice.",
-    exitStrategy: "This is simulated data. Not financial advice.",
+    signalStrength: Math.min(95, Math.max(40, strength)),
+    reasoning: `${item.name} — RSI(14): ${rsi.toFixed(1)} (${rsiLabel}). 24h change: ${change >= 0 ? "+" : ""}${change.toFixed(2)}%. Signal based on live CoinGecko price data. For educational purposes only.`,
+    entryStrategy: "Based on live market data. Not financial advice.",
+    exitStrategy: "Based on live market data. Not financial advice.",
     miniPriceHistory: history,
     volume24h: item.total_volume ?? 0,
     iconColor,
@@ -132,7 +163,7 @@ export default function App() {
     for (let page = 1; page <= 6; page++) {
       try {
         const res = await fetch(
-          `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=${page}&sparkline=false&price_change_percentage=24h`,
+          `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=${page}&sparkline=true&price_change_percentage=24h`,
         );
         const data = await res.json();
         if (!Array.isArray(data)) break;

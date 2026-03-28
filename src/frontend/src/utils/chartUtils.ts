@@ -31,120 +31,140 @@ export type TimeRange =
   | "5h"
   | "6h";
 
-const RANGE_CONFIG: Record<TimeRange, { windowMs: number; points: number }> = {
-  "1sec": { windowMs: 60_000, points: 60 },
-  "1min": { windowMs: 60_000, points: 60 },
-  "5min": { windowMs: 5 * 60_000, points: 60 },
-  "10min": { windowMs: 10 * 60_000, points: 60 },
-  "30min": { windowMs: 30 * 60_000, points: 60 },
-  "1h": { windowMs: 60 * 60_000, points: 60 },
-  "2h": { windowMs: 2 * 60 * 60_000, points: 60 },
-  "3h": { windowMs: 3 * 60 * 60_000, points: 60 },
-  "4h": { windowMs: 4 * 60 * 60_000, points: 60 },
-  "5h": { windowMs: 5 * 60 * 60_000, points: 60 },
-  "6h": { windowMs: 6 * 60 * 60_000, points: 60 },
+// How many minutes of data to show per timerange
+export const RANGE_WINDOW_MINUTES: Record<TimeRange, number> = {
+  "1sec": 15,
+  "1min": 30,
+  "5min": 60,
+  "10min": 120,
+  "30min": 180,
+  "1h": 240,
+  "2h": 360,
+  "3h": 480,
+  "4h": 600,
+  "5h": 720,
+  "6h": 1440,
 };
 
-function formatLabel(ts: number, windowMs: number): string {
+function formatLabel(ts: number, windowMinutes: number): string {
   const d = new Date(ts);
   const hh = String(d.getHours()).padStart(2, "0");
   const mm = String(d.getMinutes()).padStart(2, "0");
   const ss = String(d.getSeconds()).padStart(2, "0");
-  if (windowMs < 60_000) return `${hh}:${mm}:${ss}`;
-  if (windowMs < 60 * 60_000) return `${hh}:${mm}`;
+  if (windowMinutes < 60) return `${hh}:${mm}:${ss}`;
+  if (windowMinutes < 24 * 60) return `${hh}:${mm}`;
   return `${d.getMonth() + 1}/${d.getDate()} ${hh}:${mm}`;
 }
 
-export function generateHistoryForRange(
-  coin: CoinData,
+/**
+ * Slice real CoinGecko market chart data [[timestamp_ms, price], ...] for a given time range.
+ */
+export function slicePricesForRange(
+  rawPrices: [number, number][],
   range: TimeRange,
 ): PricePoint[] {
-  const { windowMs, points } = RANGE_CONFIG[range];
+  const windowMs = RANGE_WINDOW_MINUTES[range] * 60_000;
   const now = Date.now();
-  const intervalMs = windowMs / points;
-  const seed = coin.miniPriceHistory;
-  let price = seed[0] ?? coin.currentPrice * 0.92;
-  const history: PricePoint[] = [];
-
-  for (let i = 0; i < points; i++) {
-    const seedFrac = i / points;
-    const seedIdx = Math.floor(seedFrac * seed.length);
-    const seedPrice = seed[seedIdx] ?? coin.currentPrice;
-    price = price * 0.97 + seedPrice * 0.03;
-    price = price * (1 + (Math.random() - 0.49) * 0.018);
-    const ts = now - (points - i) * intervalMs;
-    history.push({
-      time: formatLabel(ts, windowMs),
-      price: Math.max(price, 0.000001),
-      timestamp: ts,
-    });
-  }
-  history[history.length - 1].price = coin.currentPrice;
-  return history;
+  const cutoff = now - windowMs;
+  const filtered = rawPrices.filter(([ts]) => ts >= cutoff);
+  // If we have very few points, use all available data
+  const data = filtered.length >= 5 ? filtered : rawPrices.slice(-60);
+  return data.map(([ts, price]) => ({
+    time: formatLabel(ts, RANGE_WINDOW_MINUTES[range]),
+    price,
+    timestamp: ts,
+  }));
 }
 
-export function generateLongHistory(
-  coin: CoinData,
-  points = 168,
-): PricePoint[] {
-  const now = Date.now();
-  const intervalMs = (7 * 24 * 60 * 60 * 1000) / points;
-  const history: PricePoint[] = [];
-
-  const seed = coin.miniPriceHistory;
-  let price = seed[0] ?? coin.currentPrice * 0.92;
-
-  for (let i = 0; i < points; i++) {
-    const seedFrac = i / points;
-    const seedIdx = Math.floor(seedFrac * seed.length);
-    const seedPrice = seed[seedIdx] ?? coin.currentPrice;
-    price = price * 0.97 + seedPrice * 0.03;
-    price = price * (1 + (Math.random() - 0.49) * 0.018);
-    const ts = now - (points - i) * intervalMs;
-    const date = new Date(ts);
-    const label = `${date.getMonth() + 1}/${date.getDate()} ${date.getHours()}:00`;
-    history.push({
-      time: label,
-      price: Math.max(price, 0.000001),
-      timestamp: ts,
-    });
+/**
+ * Compute Wilder's RSI from an array of closing prices.
+ */
+export function computeRealRSI(prices: number[], period = 14): number[] {
+  if (prices.length < period + 1) {
+    return prices.map(() => 50);
   }
-  history[history.length - 1].price = coin.currentPrice;
-  return history;
+  const rsiValues: number[] = new Array(period).fill(50);
+  let avgGain = 0;
+  let avgLoss = 0;
+  for (let i = 1; i <= period; i++) {
+    const delta = prices[i] - prices[i - 1];
+    if (delta >= 0) avgGain += delta;
+    else avgLoss += Math.abs(delta);
+  }
+  avgGain /= period;
+  avgLoss /= period;
+  const firstRS = avgLoss === 0 ? 100 : avgGain / avgLoss;
+  rsiValues.push(100 - 100 / (1 + firstRS));
+  for (let i = period + 1; i < prices.length; i++) {
+    const delta = prices[i] - prices[i - 1];
+    const gain = delta > 0 ? delta : 0;
+    const loss = delta < 0 ? Math.abs(delta) : 0;
+    avgGain = (avgGain * (period - 1) + gain) / period;
+    avgLoss = (avgLoss * (period - 1) + loss) / period;
+    const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
+    rsiValues.push(100 - 100 / (1 + rs));
+  }
+  return rsiValues;
 }
 
-export function generateRSIHistory(
+function computeEMA(prices: number[], period: number): number[] {
+  const k = 2 / (period + 1);
+  const ema: number[] = [];
+  let prevEma = prices[0];
+  ema.push(prevEma);
+  for (let i = 1; i < prices.length; i++) {
+    prevEma = prices[i] * k + prevEma * (1 - k);
+    ema.push(prevEma);
+  }
+  return ema;
+}
+
+/**
+ * Compute real MACD (12/26/9) from closing prices.
+ */
+export function computeRealMACD(
+  prices: number[],
+): { macd: number; signal: number; histogram: number }[] {
+  if (prices.length < 26) {
+    return prices.map(() => ({ macd: 0, signal: 0, histogram: 0 }));
+  }
+  const ema12 = computeEMA(prices, 12);
+  const ema26 = computeEMA(prices, 26);
+  const macdLine = prices.map((_, i) => ema12[i] - ema26[i]);
+  const signalLine = computeEMA(macdLine, 9);
+  return prices.map((_, i) => ({
+    macd: macdLine[i],
+    signal: signalLine[i],
+    histogram: macdLine[i] - signalLine[i],
+  }));
+}
+
+/**
+ * Build RSIPoint[] from price history and raw price array.
+ */
+export function buildRSIHistory(
   priceHistory: PricePoint[],
-  currentRsi: number,
+  rsiValues: number[],
 ): RSIPoint[] {
-  const len = priceHistory.length;
-  const rsiHistory: RSIPoint[] = [];
-  let rsi = Math.max(20, Math.min(80, currentRsi - (Math.random() * 20 - 5)));
-
-  for (let i = 0; i < len; i++) {
-    rsi = Math.max(20, Math.min(82, rsi + (Math.random() - 0.5) * 4));
-    if (i > len * 0.8) {
-      rsi = rsi * 0.95 + currentRsi * 0.05;
-    }
-    rsiHistory.push({
-      time: priceHistory[i].time,
-      rsi: Math.round(rsi * 10) / 10,
-    });
-  }
-  rsiHistory[rsiHistory.length - 1].rsi = currentRsi;
-  return rsiHistory;
+  return priceHistory.map((p, i) => ({
+    time: p.time,
+    rsi: Math.round((rsiValues[i] ?? 50) * 10) / 10,
+  }));
 }
 
-export function generateMACDHistory(priceHistory: PricePoint[]): MACDPoint[] {
-  return priceHistory.map((p, i) => {
-    const noise = (Math.random() - 0.5) * 0.004 * p.price;
-    const trend =
-      Math.sin((i / priceHistory.length) * Math.PI * 3) * 0.002 * p.price;
-    const macd = noise + trend;
-    const signal = macd * 0.85 + (Math.random() - 0.5) * 0.001 * p.price;
-    const histogram = macd - signal;
-    return { time: p.time, macd, signal, histogram };
-  });
+/**
+ * Build MACDPoint[] from price history and MACD values.
+ */
+export function buildMACDHistory(
+  priceHistory: PricePoint[],
+  macdValues: { macd: number; signal: number; histogram: number }[],
+): MACDPoint[] {
+  return priceHistory.map((p, i) => ({
+    time: p.time,
+    macd: macdValues[i]?.macd ?? 0,
+    signal: macdValues[i]?.signal ?? 0,
+    histogram: macdValues[i]?.histogram ?? 0,
+  }));
 }
 
 export function formatPrice(price: number): string {
@@ -158,4 +178,42 @@ export function computeSMA(prices: number[], period: number): number {
   if (prices.length < period) return prices[prices.length - 1] ?? 0;
   const slice = prices.slice(-period);
   return slice.reduce((a, b) => a + b, 0) / period;
+}
+
+// Keep for backward compat (used in MiniChart if any)
+export function generateHistoryForRange(
+  coin: CoinData,
+  _range: TimeRange,
+): PricePoint[] {
+  // Fallback: generate flat line at current price — no fake randomness
+  const now = Date.now();
+  return coin.miniPriceHistory.map((price, i) => ({
+    time: "",
+    price,
+    timestamp: now - (coin.miniPriceHistory.length - i) * 300_000,
+  }));
+}
+
+export function generateRSIHistory(
+  priceHistory: PricePoint[],
+  currentRsi: number,
+): RSIPoint[] {
+  const prices = priceHistory.map((p) => p.price);
+  const rsiValues = computeRealRSI(prices);
+  // Anchor last value to current RSI from CoinGecko signals
+  if (rsiValues.length > 0) rsiValues[rsiValues.length - 1] = currentRsi;
+  return buildRSIHistory(priceHistory, rsiValues);
+}
+
+export function generateMACDHistory(priceHistory: PricePoint[]): MACDPoint[] {
+  const prices = priceHistory.map((p) => p.price);
+  const macdValues = computeRealMACD(prices);
+  return buildMACDHistory(priceHistory, macdValues);
+}
+
+export function generateLongHistory(
+  coin: CoinData,
+  _points = 168,
+): PricePoint[] {
+  return generateHistoryForRange(coin, "6h");
 }

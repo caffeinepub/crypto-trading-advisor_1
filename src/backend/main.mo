@@ -1,10 +1,10 @@
 import Text "mo:core/Text";
 import Map "mo:core/Map";
 import Set "mo:core/Set";
-import Migration "migration";
+
 
 // Migration is specified in with-clause
-(with migration = Migration.run)
+
 actor {
   let supportedCoins = Set.fromArray(["BTC", "ETH", "ICP", "XRP", "BNB", "SOL", "ADA", "DOT", "AVAX", "MATIC", "LINK", "UNI", "AAVE", "FET", "XDC", "VET", "XLM", "KSM", "SAND", "ILV"]);
 

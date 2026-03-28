@@ -32,6 +32,12 @@ function fromB64url(str: string): ArrayBuffer {
   return bytes.buffer as ArrayBuffer;
 }
 
+interface CloudLockData {
+  enabled: boolean;
+  pinHash: string | null;
+  biometricCredId?: string | null;
+}
+
 export function useLockStore() {
   const [isLocked, setIsLocked] = useState(() => {
     return localStorage.getItem(KEYS.enabled) === "true";
@@ -50,12 +56,9 @@ export function useLockStore() {
     }
   }, []);
 
-  // Load from cloud on mount
+  // Load from cloud on mount — restore PIN and biometric credential ID
   useEffect(() => {
-    cloudLoad<{ enabled: boolean; pinHash: string | null } | null>(
-      CLOUD_KEY,
-      null,
-    )
+    cloudLoad<CloudLockData | null>(CLOUD_KEY, null)
       .then((data) => {
         if (!data) return;
         if (data.enabled && data.pinHash) {
@@ -68,6 +71,11 @@ export function useLockStore() {
             setIsEnabled(false);
           }
         }
+        // Restore biometric credential ID from cloud
+        if (data.biometricCredId) {
+          localStorage.setItem(KEYS.biometricCredId, data.biometricCredId);
+          setHasBiometric(true);
+        }
       })
       .catch(() => {});
   }, []);
@@ -77,7 +85,8 @@ export function useLockStore() {
     localStorage.setItem(KEYS.pinHash, hash);
     localStorage.setItem(KEYS.enabled, "true");
     setIsEnabled(true);
-    cloudSave(CLOUD_KEY, { enabled: true, pinHash: hash });
+    const biometricCredId = localStorage.getItem(KEYS.biometricCredId);
+    cloudSave(CLOUD_KEY, { enabled: true, pinHash: hash, biometricCredId });
   }, []);
 
   const verifyPin = useCallback(async (pin: string): Promise<boolean> => {
@@ -125,6 +134,14 @@ export function useLockStore() {
       const credId = b64url(pk.rawId);
       localStorage.setItem(KEYS.biometricCredId, credId);
       setHasBiometric(true);
+      // Persist biometric credential ID to cloud so it survives browser data clearing
+      const pinHash = localStorage.getItem(KEYS.pinHash);
+      const enabled = localStorage.getItem(KEYS.enabled) === "true";
+      cloudSave(CLOUD_KEY, {
+        enabled,
+        pinHash: pinHash ?? null,
+        biometricCredId: credId,
+      });
       return true;
     } catch {
       return false;
@@ -155,6 +172,13 @@ export function useLockStore() {
   const disableBiometric = useCallback(() => {
     localStorage.removeItem(KEYS.biometricCredId);
     setHasBiometric(false);
+    const pinHash = localStorage.getItem(KEYS.pinHash);
+    const enabled = localStorage.getItem(KEYS.enabled) === "true";
+    cloudSave(CLOUD_KEY, {
+      enabled,
+      pinHash: pinHash ?? null,
+      biometricCredId: null,
+    });
   }, []);
 
   const disableLock = useCallback(() => {
@@ -164,7 +188,11 @@ export function useLockStore() {
     setIsEnabled(false);
     setHasBiometric(false);
     setIsLocked(false);
-    cloudSave(CLOUD_KEY, { enabled: false, pinHash: null });
+    cloudSave(CLOUD_KEY, {
+      enabled: false,
+      pinHash: null,
+      biometricCredId: null,
+    });
   }, []);
 
   return {
