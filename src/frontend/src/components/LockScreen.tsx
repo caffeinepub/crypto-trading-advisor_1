@@ -28,8 +28,10 @@ export function LockScreen({ onUnlock }: LockScreenProps) {
   const [error, setError] = useState("");
   const [shake, setShake] = useState(false);
   const [biometricLoading, setBiometricLoading] = useState(false);
+  const [credentialLost, setCredentialLost] = useState(false);
   const maxLen = 8;
   const shakeTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const biometricAttempted = useRef(false);
 
   const triggerShake = useCallback(() => {
     setShake(true);
@@ -66,18 +68,38 @@ export function LockScreen({ onUnlock }: LockScreenProps) {
     }
   };
 
-  const handleBiometric = async () => {
+  const handleBiometric = useCallback(async () => {
     setBiometricLoading(true);
     setError("");
-    const ok = await verifyBiometric();
+    setCredentialLost(false);
+    const result = await verifyBiometric();
     setBiometricLoading(false);
-    if (ok) {
+    if (result.ok) {
       onUnlock();
+    } else if (result.credentialLost) {
+      // Biometric credential was deleted (browser data cleared)
+      setCredentialLost(true);
+      setError(
+        "Biometric data was cleared. Please re-register in Lock Settings, then use your PIN.",
+      );
+      triggerShake();
     } else {
-      setError("Biometric verification failed.");
+      setError("Biometric verification failed. Use your PIN instead.");
       triggerShake();
     }
-  };
+  }, [verifyBiometric, onUnlock, triggerShake]);
+
+  // Auto-trigger biometric when lock screen opens (once)
+  useEffect(() => {
+    if (hasBiometric && !biometricAttempted.current) {
+      biometricAttempted.current = true;
+      // Small delay so the lock screen renders first
+      const t = setTimeout(() => {
+        handleBiometric();
+      }, 400);
+      return () => clearTimeout(t);
+    }
+  }, [hasBiometric, handleBiometric]);
 
   // Keyboard support
   useEffect(() => {
@@ -154,7 +176,9 @@ export function LockScreen({ onUnlock }: LockScreenProps) {
             CoinAlert
           </h1>
           <p className="text-sm" style={{ color: "oklch(0.6 0.012 240)" }}>
-            Enter your PIN to continue
+            {biometricLoading
+              ? "Verifying biometric…"
+              : "Enter your PIN to continue"}
           </p>
         </div>
 
@@ -186,7 +210,11 @@ export function LockScreen({ onUnlock }: LockScreenProps) {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             className="text-xs text-center"
-            style={{ color: "oklch(0.65 0.22 25)" }}
+            style={{
+              color: credentialLost
+                ? "oklch(0.75 0.18 55)"
+                : "oklch(0.65 0.22 25)",
+            }}
             data-ocid="lock.error_state"
           >
             {error}
@@ -243,7 +271,7 @@ export function LockScreen({ onUnlock }: LockScreenProps) {
         )}
 
         {/* Biometric button */}
-        {hasBiometric && supportsWebAuthn && (
+        {hasBiometric && supportsWebAuthn && !credentialLost && (
           <button
             type="button"
             onClick={handleBiometric}
@@ -251,30 +279,72 @@ export function LockScreen({ onUnlock }: LockScreenProps) {
             className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all active:scale-95"
             style={{
               backgroundColor: "oklch(0.14 0.013 243)",
-              color: "oklch(0.72 0.015 240)",
+              color: biometricLoading
+                ? "oklch(0.67 0.18 243)"
+                : "oklch(0.72 0.015 240)",
               border: "1px solid oklch(0.24 0.016 243)",
               opacity: biometricLoading ? 0.7 : 1,
             }}
             data-ocid="lock.secondary_button"
           >
-            <svg
-              width="18"
-              height="18"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.8"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              role="img"
-              aria-label="Fingerprint"
-            >
-              <path d="M12 12c2.2 0 4-1.8 4-4S14.2 4 12 4 8 5.8 8 8s1.8 4 4 4z" />
-              <path d="M12 14c-4 0-7 2-7 4v1h14v-1c0-2-3-4-7-4z" />
-              <path d="M8.5 8.5c0 1.9 1.6 3.5 3.5 3.5" />
-            </svg>
+            {biometricLoading ? (
+              <svg
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                role="img"
+                aria-label="Loading"
+              >
+                <title>Loading</title>
+                <circle cx="12" cy="12" r="10" strokeOpacity="0.3" />
+                <path d="M12 2a10 10 0 0 1 10 10" strokeLinecap="round">
+                  <animateTransform
+                    attributeName="transform"
+                    type="rotate"
+                    from="0 12 12"
+                    to="360 12 12"
+                    dur="0.8s"
+                    repeatCount="indefinite"
+                  />
+                </path>
+              </svg>
+            ) : (
+              <svg
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                role="img"
+                aria-label="Fingerprint"
+              >
+                <path d="M12 12c2.2 0 4-1.8 4-4S14.2 4 12 4 8 5.8 8 8s1.8 4 4 4z" />
+                <path d="M12 14c-4 0-7 2-7 4v1h14v-1c0-2-3-4-7-4z" />
+                <path d="M8.5 8.5c0 1.9 1.6 3.5 3.5 3.5" />
+              </svg>
+            )}
             {biometricLoading ? "Verifying…" : "Use Fingerprint / Face ID"}
           </button>
+        )}
+
+        {/* Re-register prompt when credential is lost */}
+        {credentialLost && (
+          <div
+            className="w-full px-3 py-2.5 rounded-xl text-xs text-center"
+            style={{
+              backgroundColor: "oklch(0.75 0.18 55 / 0.1)",
+              border: "1px solid oklch(0.75 0.18 55 / 0.3)",
+              color: "oklch(0.75 0.18 55)",
+            }}
+          >
+            Open Lock Settings after unlocking to re-register your biometric.
+          </div>
         )}
       </motion.div>
     </div>

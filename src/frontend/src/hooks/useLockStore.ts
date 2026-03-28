@@ -111,20 +111,30 @@ export function useLockStore() {
     try {
       const challengeBytes = window.crypto.getRandomValues(new Uint8Array(32));
       const challenge = challengeBytes.buffer as ArrayBuffer;
+      // Use a fixed user ID as a proper Uint8Array buffer
+      const userId = new Uint8Array(16);
+      userId.set([
+        99, 111, 105, 110, 97, 108, 101, 114, 116, 45, 117, 115, 114,
+      ]);
+
       const cred = await navigator.credentials.create({
         publicKey: {
           challenge,
           rp: { name: "CoinAlert", id: window.location.hostname },
           user: {
-            id: new TextEncoder().encode("coinalert-user")
-              .buffer as ArrayBuffer,
+            id: userId.buffer as ArrayBuffer,
             name: "coinalert-user",
             displayName: "CoinAlert User",
           },
-          pubKeyCredParams: [{ alg: -7, type: "public-key" }],
+          pubKeyCredParams: [
+            { alg: -7, type: "public-key" }, // ES256
+            { alg: -257, type: "public-key" }, // RS256 fallback
+          ],
           authenticatorSelection: {
-            authenticatorAttachment: "platform",
-            userVerification: "required",
+            // No authenticatorAttachment restriction — allow platform (Touch ID / Face ID / Windows Hello)
+            // AND roaming authenticators (hardware keys)
+            userVerification: "preferred",
+            residentKey: "preferred",
           },
           timeout: 60000,
         },
@@ -134,7 +144,6 @@ export function useLockStore() {
       const credId = b64url(pk.rawId);
       localStorage.setItem(KEYS.biometricCredId, credId);
       setHasBiometric(true);
-      // Persist biometric credential ID to cloud so it survives browser data clearing
       const pinHash = localStorage.getItem(KEYS.pinHash);
       const enabled = localStorage.getItem(KEYS.enabled) === "true";
       cloudSave(CLOUD_KEY, {
@@ -143,14 +152,24 @@ export function useLockStore() {
         biometricCredId: credId,
       });
       return true;
-    } catch {
+    } catch (err) {
+      console.error("Biometric setup error:", err);
       return false;
     }
   }, []);
 
-  const verifyBiometric = useCallback(async (): Promise<boolean> => {
+  /**
+   * Returns:
+   *   { ok: true }  — verified successfully
+   *   { ok: false, credentialLost: true }  — credential was deleted (browser data cleared), need re-register
+   *   { ok: false, credentialLost: false } — user cancelled or other error
+   */
+  const verifyBiometric = useCallback(async (): Promise<{
+    ok: boolean;
+    credentialLost?: boolean;
+  }> => {
     const credIdStr = localStorage.getItem(KEYS.biometricCredId);
-    if (!credIdStr || !window.PublicKeyCredential) return false;
+    if (!credIdStr || !window.PublicKeyCredential) return { ok: false };
     try {
       const challengeBytes = window.crypto.getRandomValues(new Uint8Array(32));
       const challenge = challengeBytes.buffer as ArrayBuffer;
@@ -159,13 +178,30 @@ export function useLockStore() {
         publicKey: {
           challenge,
           allowCredentials: [{ id: credId, type: "public-key" }],
-          userVerification: "required",
+          userVerification: "preferred",
           timeout: 60000,
         },
       });
-      return !!assertion;
-    } catch {
-      return false;
+      if (assertion) return { ok: true };
+      return { ok: false };
+    } catch (err: unknown) {
+      console.error("Biometric verify error:", err);
+      // If the credential is not found on this device, clear it so user can re-register
+      const errName = err instanceof Error ? err.name : "";
+      const errMsg = err instanceof Error ? err.message.toLowerCase() : "";
+      const isNotFound =
+        errName === "NotAllowedError" ||
+        errName === "InvalidStateError" ||
+        errMsg.includes("not found") ||
+        errMsg.includes("no credentials") ||
+        errMsg.includes("not allowed");
+      if (isNotFound) {
+        // Clear invalid credential so user is prompted to re-register
+        localStorage.removeItem(KEYS.biometricCredId);
+        setHasBiometric(false);
+        return { ok: false, credentialLost: true };
+      }
+      return { ok: false };
     }
   }, []);
 
