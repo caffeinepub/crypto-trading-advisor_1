@@ -111,7 +111,6 @@ export function useLockStore() {
     try {
       const challengeBytes = window.crypto.getRandomValues(new Uint8Array(32));
       const challenge = challengeBytes.buffer as ArrayBuffer;
-      // Use a fixed user ID as a proper Uint8Array buffer
       const userId = new Uint8Array(16);
       userId.set([
         99, 111, 105, 110, 97, 108, 101, 114, 116, 45, 117, 115, 114,
@@ -131,8 +130,9 @@ export function useLockStore() {
             { alg: -257, type: "public-key" }, // RS256 fallback
           ],
           authenticatorSelection: {
-            // No authenticatorAttachment restriction — allow platform (Touch ID / Face ID / Windows Hello)
-            // AND roaming authenticators (hardware keys)
+            // platform = use device biometric (Face ID, Touch ID, fingerprint)
+            // NOT a hardware security key
+            authenticatorAttachment: "platform",
             userVerification: "preferred",
             residentKey: "preferred",
           },
@@ -161,8 +161,8 @@ export function useLockStore() {
   /**
    * Returns:
    *   { ok: true }  — verified successfully
-   *   { ok: false, credentialLost: true }  — credential was deleted (browser data cleared), need re-register
-   *   { ok: false, credentialLost: false } — user cancelled or other error
+   *   { ok: false, credentialLost: true }  — credential not found on device, needs re-register
+   *   { ok: false, credentialLost: false } — user cancelled or other temporary error
    */
   const verifyBiometric = useCallback(async (): Promise<{
     ok: boolean;
@@ -186,21 +186,28 @@ export function useLockStore() {
       return { ok: false };
     } catch (err: unknown) {
       console.error("Biometric verify error:", err);
-      // If the credential is not found on this device, clear it so user can re-register
       const errName = err instanceof Error ? err.name : "";
       const errMsg = err instanceof Error ? err.message.toLowerCase() : "";
+
+      // NotAllowedError = user cancelled or permission denied — do NOT clear credential
+      if (errName === "NotAllowedError" || errName === "AbortError") {
+        return { ok: false, credentialLost: false };
+      }
+
+      // NotFoundError = credential does not exist on this device — clear and ask to re-register
       const isNotFound =
-        errName === "NotAllowedError" ||
+        errName === "NotFoundError" ||
         errName === "InvalidStateError" ||
         errMsg.includes("not found") ||
         errMsg.includes("no credentials") ||
-        errMsg.includes("not allowed");
+        errMsg.includes("no matching");
+
       if (isNotFound) {
-        // Clear invalid credential so user is prompted to re-register
         localStorage.removeItem(KEYS.biometricCredId);
         setHasBiometric(false);
         return { ok: false, credentialLost: true };
       }
+
       return { ok: false };
     }
   }, []);
