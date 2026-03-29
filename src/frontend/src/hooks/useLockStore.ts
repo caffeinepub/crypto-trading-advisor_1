@@ -19,11 +19,15 @@ async function sha256Hex(text: string): Promise<string> {
     .join("");
 }
 
+// Safe base64url encoding that avoids stack overflow on mobile
+// (spread operator on large typed arrays can exceed call stack on mobile browsers)
 function b64url(buf: ArrayBuffer): string {
-  return btoa(String.fromCharCode(...new Uint8Array(buf)))
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=/g, "");
+  const bytes = new Uint8Array(buf);
+  let binary = "";
+  for (let i = 0; i < bytes.byteLength; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
 }
 
 function fromB64url(str: string): ArrayBuffer {
@@ -131,7 +135,6 @@ export function useLockStore() {
           ],
           authenticatorSelection: {
             // platform = use device biometric (Face ID, Touch ID, fingerprint)
-            // NOT a hardware security key
             authenticatorAttachment: "platform",
             userVerification: "preferred",
             residentKey: "preferred",
@@ -163,38 +166,70 @@ export function useLockStore() {
    *   { ok: true }  — verified successfully
    *   { ok: false, credentialLost: true }  — credential not found on device, needs re-register
    *   { ok: false, credentialLost: false } — user cancelled or other temporary error
+   *
+   * Strategy: First try with the stored credential ID (specific match).
+   * If that fails with NotFound, try with empty allowCredentials (lets the OS
+   * pick any available platform credential — more compatible on mobile).
+   * This handles cases where the credential ID in storage doesn't exactly match
+   * what the device has indexed (common on iOS Safari and Android Chrome).
    */
   const verifyBiometric = useCallback(async (): Promise<{
     ok: boolean;
     credentialLost?: boolean;
   }> => {
+    if (!window.PublicKeyCredential) return { ok: false };
+
     const credIdStr = localStorage.getItem(KEYS.biometricCredId);
-    if (!credIdStr || !window.PublicKeyCredential) return { ok: false };
-    try {
-      const challengeBytes = window.crypto.getRandomValues(new Uint8Array(32));
-      const challenge = challengeBytes.buffer as ArrayBuffer;
-      const credId = fromB64url(credIdStr);
-      const assertion = await navigator.credentials.get({
+    const challengeBytes = window.crypto.getRandomValues(new Uint8Array(32));
+    const challenge = challengeBytes.buffer as ArrayBuffer;
+
+    // Helper to attempt assertion with given allowCredentials list
+    const attempt = async (
+      allowCredentials: PublicKeyCredentialDescriptor[],
+    ) => {
+      return navigator.credentials.get({
         publicKey: {
           challenge,
-          allowCredentials: [{ id: credId, type: "public-key" }],
+          allowCredentials,
           userVerification: "preferred",
           timeout: 60000,
         },
       });
-      if (assertion) return { ok: true };
+    };
+
+    try {
+      // First attempt: use the stored credential ID if available
+      if (credIdStr) {
+        const credId = fromB64url(credIdStr);
+        try {
+          const assertion = await attempt([{ id: credId, type: "public-key" }]);
+          if (assertion) return { ok: true };
+        } catch (specificErr: unknown) {
+          const name = specificErr instanceof Error ? specificErr.name : "";
+          // If not found or invalid, fall through to broad attempt
+          if (name === "NotAllowedError" || name === "AbortError") {
+            return { ok: false, credentialLost: false };
+          }
+          // For any other error (NotFoundError, etc.), try broad match below
+        }
+      }
+
+      // Second attempt: empty allowCredentials — OS will show any matching
+      // platform credential. More compatible with iOS Safari and Android Chrome.
+      const broadAssertion = await attempt([]);
+      if (broadAssertion) return { ok: true };
       return { ok: false };
     } catch (err: unknown) {
       console.error("Biometric verify error:", err);
       const errName = err instanceof Error ? err.name : "";
       const errMsg = err instanceof Error ? err.message.toLowerCase() : "";
 
-      // NotAllowedError = user cancelled or permission denied — do NOT clear credential
+      // User cancelled or permission denied
       if (errName === "NotAllowedError" || errName === "AbortError") {
         return { ok: false, credentialLost: false };
       }
 
-      // NotFoundError = credential does not exist on this device — clear and ask to re-register
+      // Credential truly missing — ask to re-register
       const isNotFound =
         errName === "NotFoundError" ||
         errName === "InvalidStateError" ||
